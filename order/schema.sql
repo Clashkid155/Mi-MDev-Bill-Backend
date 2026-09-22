@@ -1,0 +1,32 @@
+CREATE TABLE IF NOT EXISTS orders (
+    id              TEXT PRIMARY KEY,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    kind            TEXT NOT NULL,
+    network         TEXT NOT NULL,             -- ABS network / disco id
+    plan_id         TEXT NOT NULL DEFAULT '',   -- data plan id
+    recipient       TEXT NOT NULL,             -- phone, FibreX FN or meter number
+    amount_kobo     INTEGER NOT NULL CHECK (amount_kobo > 0),
+    customer_email  TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    invoice_ref     TEXT NOT NULL DEFAULT '',
+    txn_ref         TEXT NOT NULL DEFAULT '',
+    account_no      TEXT NOT NULL DEFAULT '',
+    account_name    TEXT NOT NULL DEFAULT '',
+    bank_name       TEXT NOT NULL DEFAULT '',
+    checkout_url    TEXT NOT NULL DEFAULT '',
+    expires_at      INTEGER NOT NULL,          -- unix seconds
+    vend_response   TEXT NOT NULL DEFAULT '',  -- raw ABS reply; may hold tokens/pins
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS orders_txn_ref ON orders (txn_ref);
+CREATE INDEX IF NOT EXISTS orders_status ON orders (status, updated_at);
+
+-- Audit log of every webhook received, from either provider.
+CREATE TABLE IF NOT EXISTS webhook_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider    TEXT NOT NULL,
+    event_key   TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    received_at INTEGER NOT NULL
+);
