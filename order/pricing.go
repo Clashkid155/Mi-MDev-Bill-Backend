@@ -146,13 +146,13 @@ func resolveElectricity(catalog abs.Catalog, r CreateRequest) (product, error) {
 // pays, and shows the owner to them. A meter ABS does not accept is an
 // InvalidError; any other failure is passed on.
 func (s *Service) ValidateMeter(ctx context.Context, serviceID, meter string) (json.RawMessage, error) {
-	catalog, err := s.Vendor.Catalog(ctx)
+	/*catalog, err := s.Vendor.Catalog(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("catalog: %w", err)
 	}
 	if _, ok := catalog.FindElectricityService(serviceID); !ok {
-		return nil, InvalidError{"unknown electricity service"}
-	}
+		return nil, InvalidError{"unknown electricity DISCO"}
+	}*/
 	details, err := s.Vendor.ValidateMeter(ctx, serviceID, meter)
 	if rejected, ok := errors.AsType[abs.Rejected](err); ok {
 		//return nil, InvalidError{"this meter was not accepted: " + rejected.Reason}
