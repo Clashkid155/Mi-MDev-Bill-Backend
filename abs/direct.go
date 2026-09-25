@@ -33,6 +33,9 @@ func (r directResponse) errorDetail() (code int, text string) {
 	if json.Unmarshal(r.Error, &detail) != nil {
 		return 0, ""
 	}
+	if r.Text != "" {
+		return detail.Code, r.Text
+	}
 	return detail.Code, detail.Text
 }
 

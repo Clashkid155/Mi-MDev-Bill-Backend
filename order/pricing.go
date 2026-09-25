@@ -154,9 +154,9 @@ func (s *Service) ValidateMeter(ctx context.Context, serviceID, meter string) (j
 		return nil, InvalidError{"unknown electricity service"}
 	}
 	details, err := s.Vendor.ValidateMeter(ctx, serviceID, meter)
-	var rejected abs.Rejected
-	if errors.As(err, &rejected) {
-		return nil, InvalidError{"this meter was not accepted: " + rejected.Reason}
+	if rejected, ok := errors.AsType[abs.Rejected](err); ok {
+		//return nil, InvalidError{"this meter was not accepted: " + rejected.Reason}
+		return nil, InvalidError{rejected.Reason}
 	}
 	return details, err
 }
