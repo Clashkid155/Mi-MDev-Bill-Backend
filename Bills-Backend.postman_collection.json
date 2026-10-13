@@ -1,0 +1,783 @@
+{
+	"info": {
+		"name": "Bills Backend",
+		"description": "Test calls for the Mi MDev bills backend. Start the server with `go run .` (APP_ENV=sandbox). The app does not use ABS vouchers; the /abs/voucher request under \"ABS Vendor (direct)\" is only for testing ABS itself. The /abs and /monnify folders call the providers directly and need the admin token when ADMIN_TOKEN is set. Every response uses one envelope: {\"status\":\"successful\"|\"failed\",\"message\":\"...\",\"data\":{...},\"error\":\"...\"}. Look under `data` for the actual payload (order id, invoice reference, etc.); `error` is only present when status is \"failed\".",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080"
+		},
+		{
+			"key": "invoiceReference",
+			"value": ""
+		},
+		{
+			"key": "orderId",
+			"value": ""
+		},
+		{
+			"key": "transactionReference",
+			"value": ""
+		},
+		{
+			"key": "absOrderId",
+			"value": ""
+		},
+		{
+			"key": "adminToken",
+			"value": ""
+		}
+	],
+	"item": [
+		{
+			"name": "Health",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/healthz",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"healthz"
+					]
+				}
+			}
+		},
+		{
+			"name": "ABS Vendor (direct)",
+			"item": [
+				{
+					"name": "Catalog (start here)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/abs/catalog",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"catalog"
+							]
+						},
+						"description": "ABS's live catalog: airtime providers, data plans, electricity services, voucher providers. Use it to find the ids the calls below need."
+					}
+				},
+				{
+					"name": "Buy airtime",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/abs/airtime",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"airtime"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"network\": \"MTNAIR6TFD\",\n  \"phone\": \"08012345678\",\n  \"amount_naira\": 100\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "network is an AIRTIME product trackid. Minimum 50 naira. The reply has sandbox:true unless ABS_SANDBOX=false."
+					}
+				},
+				{
+					"name": "Buy data",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/abs/data",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"data"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"network\": \"MTN56TFD\",\n  \"plan\": \"6BO1H\",\n  \"phone\": \"08012345678\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "network is a DATA network trackid (different from the airtime id) and plan is a plan trackid."
+					}
+				},
+				{
+					"name": "Buy electricity",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/abs/electricity",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"electricity"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"disco\": \"SERVICE_TRACKID\",\n  \"meter\": \"12345678901\",\n  \"amount_naira\": 1000\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Minimum 1000 naira. Run Validate meter first."
+					}
+				},
+				{
+					"name": "Buy airtime voucher",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/abs/voucher",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"voucher"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"network\": \"MTNAIR6TFD\",\n  \"unit\": \"HBSI2\",\n  \"quantity\": 1\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "quantity is 1-30."
+					}
+				},
+				{
+					"name": "Validate meter (free)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/abs/validate-meter",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"validate-meter"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"disco\": \"SERVICE_TRACKID\",\n  \"meter\": \"12345678901\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					}
+				},
+				{
+					"name": "Check transaction",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/abs/transaction/{{absOrderId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"abs",
+								"transaction",
+								"{{absOrderId}}"
+							]
+						},
+						"description": "Looks up an order ABS already accepted. Set absOrderId to the id ABS gave the order (the order_id in ABS webhooks)."
+					}
+				}
+			],
+			"description": "Calls ABS's Direct API through the backend. Purchases are only validated while ABS_SANDBOX=true."
+		},
+		{
+			"name": "Email (direct)",
+			"item": [
+				{
+					"name": "Send email",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/email/send",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"email",
+								"send"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"test@example.com\",\n  \"to_name\": \"Test User\",\n  \"subject\": \"Test email\",\n  \"text\": \"Hello from Mi MDev.\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Sends one email through ZeptoMail directly, bypassing the order flow. With MAIL_SANDBOX=true (the default) nothing is sent, the reply says so; set MAIL_SANDBOX=false to actually deliver."
+					}
+				}
+			]
+		},
+		{
+			"name": "Monnify (direct)",
+			"item": [
+				{
+					"name": "Create invoice",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/monnify/invoice",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"monnify",
+								"invoice"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount_naira\": 100,\n  \"email\": \"test@example.com\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Optional: name, description, reference, expires_in_minutes (default 30)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.reference) pm.collectionVariables.set('invoiceReference', r.data.reference);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Get invoice",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/monnify/invoice/{{invoiceReference}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"monnify",
+								"invoice",
+								"{{invoiceReference}}"
+							]
+						},
+						"description": "Uses the reference saved by Create invoice."
+					}
+				},
+				{
+					"name": "Verify transaction (what was really paid)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/monnify/transaction/{{transactionReference}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"monnify",
+								"transaction",
+								"{{transactionReference}}"
+							]
+						},
+						"description": "Asks Monnify about the payment itself: payment_status (PAID, PARTIALLY_PAID, OVERPAID, PENDING...) and amount_paid_naira vs total_payable_naira. Use the transaction_reference from Create invoice."
+					}
+				},
+				{
+					"name": "Cancel invoice",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/monnify/invoice/{{invoiceReference}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"monnify",
+								"invoice",
+								"{{invoiceReference}}"
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Orders (app API)",
+			"item": [
+				{
+					"name": "Create order (airtime)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v1/orders",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"orders"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"idempotency_key\": \"{{$guid}}\",\n  \"kind\": \"airtime\",\n  \"network\": \"MTNAIR6TFD\",\n  \"recipient\": \"08012345678\",\n  \"amount_kobo\": 10000,\n  \"email\": \"test@example.com\",\n  \"customer_name\": \"Ada Obi\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Amounts here are in kobo. Send the same idempotency_key twice to see the same order come back.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) pm.collectionVariables.set('orderId', r.data.id);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Create order (data)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v1/orders",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"orders"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"idempotency_key\": \"{{$guid}}\",\n  \"kind\": \"data\",\n  \"plan_id\": \"PLAN_ID_FROM_CATALOG\",\n  \"recipient\": \"08012345678\",\n  \"email\": \"test@example.com\",\n  \"customer_name\": \"Ada Obi\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "The price comes from the catalog, so no amount is sent. plan_id is a data plan id from GET /v1/catalog.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) { pm.collectionVariables.set('orderId', r.data.id); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Create order (FibreX plan)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v1/orders",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"orders"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"idempotency_key\": \"{{$guid}}\",\n  \"kind\": \"data\",\n  \"plan_id\": \"FIBRE_PLAN_ID_FROM_CATALOG\",\n  \"recipient\": \"FN111700\",\n  \"email\": \"test@example.com\",\n  \"customer_name\": \"Ada Obi\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "FibreX plans (recipient_type \"fn\", category \"FibreX\" in the catalog) are bought for a FibreX FN: two letters FN and 6 digits. ABS's \"ODU\" plans look similar in the catalog but are bought for an ordinary phone number (recipient_type \"phone\"); use the same Create order (data) request for those.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) { pm.collectionVariables.set('orderId', r.data.id); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Create order (electricity)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v1/orders",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"orders"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"idempotency_key\": \"{{$guid}}\",\n  \"kind\": \"electricity\",\n  \"service_id\": \"SERVICE_ID_FROM_CATALOG\",\n  \"recipient\": \"12345678901\",\n  \"amount_kobo\": 100000,\n  \"email\": \"test@example.com\",\n  \"customer_name\": \"Ada Obi\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Call \"Validate meter\" first and show the owner to the customer; the backend does not check the meter itself at order time. Minimum 1000 naira (100000 kobo). The token appears as `delivery` on the order once it succeeds.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) { pm.collectionVariables.set('orderId', r.data.id); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Validate meter (before ordering)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v1/meters/validate",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"meters",
+								"validate"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"service_id\": \"SERVICE_ID_FROM_CATALOG\",\n  \"meter\": \"12345678901\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Free. Shows who the meter belongs to so the customer can confirm before paying."
+					},
+					"event": []
+				},
+				{
+					"name": "Get order",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/v1/orders/{{orderId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"orders",
+								"{{orderId}}"
+							]
+						},
+						"description": "Uses the id saved by Create order (ids look like MDEV_ followed by 32 hex characters).\n\nWhile the order is AWAITING_PAYMENT or PARTIALLY_PAID, each call (at most once every 5 seconds per order) also asks Monnify whether it was paid, so the order moves on even if the webhook never arrives. When an order reaches SUCCESS and ZeptoMail is configured, the customer is emailed a receipt (to test it: pay the order in Monnify's bank simulator and set MAIL_SANDBOX=false, using your own email on the order)."
+					}
+				},
+				{
+					"name": "Catalog (via orders API)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/v1/catalog",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"catalog"
+							]
+						}
+					}
+				},
+				{
+					"name": "List orders (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/orders?status=PENDING,REFUND_DUE&limit=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"orders"
+							],
+							"query": [
+								{
+									"key": "status",
+									"value": "PENDING,REFUND_DUE",
+									"disabled": true
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						},
+						"description": "Operator view of every order, newest first. Optional status (comma separated) and limit (1-200, default 50). Statuses: INITIATED, AWAITING_PAYMENT, PAID, PARTIALLY_PAID, OVERPAID, VENDING, SUCCESS, PENDING, FAILED, REFUND_DUE, REFUNDED, EXPIRED, CANCELLED. Each order includes network_name and plan_name (the catalog's display names as they were when the order was placed; blank on orders from before they were stored). Needs the admin token."
+					}
+				},
+				{
+					"name": "List webhooks (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/webhooks?provider=monnify&limit=20",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"webhooks"
+							],
+							"query": [
+								{
+									"key": "provider",
+									"value": "monnify"
+								},
+								{
+									"key": "limit",
+									"value": "20"
+								}
+							]
+						},
+						"description": "Every webhook exactly as received, newest first. Optional provider (monnify or abs) and limit (1-200, default 20). Needs the admin token."
+					}
+				}
+			],
+			"description": "The real purchase flow: create an order, pay into the account it returns, then poll the order."
+		},
+		{
+			"name": "Webhooks (simulated)",
+			"item": [
+				{
+					"name": "Monnify: successful payment (simulated)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/webhooks/monnify",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"webhooks",
+								"monnify"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"eventType\": \"SUCCESSFUL_TRANSACTION\",\n  \"eventData\": {\n    \"transactionReference\": \"{{transactionReference}}\",\n    \"paymentStatus\": \"PAID\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Sandbox only: signatures are not checked outside production. Set transactionReference to the one returned by Create order. The backend still asks Monnify whether the invoice is really PAID, so an unpaid invoice will not vend."
+					}
+				},
+				{
+					"name": "ABS: transaction settled (simulated)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/webhooks/abs",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"webhooks",
+								"abs"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"event\": \"transaction.settled\",\n  \"data\": {\n    \"order_id\": \"BD1\",\n    \"status\": \"1\",\n    \"amount\": \"100.00\",\n    \"recipient\": \"08012345678\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Only works unsigned when ABS_WEBHOOK_SECRET is empty. Events are just logged for now."
+					}
+				}
+			]
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{adminToken}}",
+				"type": "string"
+			}
+		]
+	}
+}
