@@ -11,7 +11,11 @@ func TestTransitions(t *testing.T) {
 		{StatusPending, StatusSuccess},
 		{StatusPending, StatusFailed},
 		{StatusFailed, StatusRefundDue},
-		{StatusExpired, StatusPaid},
+		{StatusAwaitingPayment, StatusExpired},
+		{StatusAwaitingPayment, StatusPartiallyPaid},
+		{StatusAwaitingPayment, StatusOverpaid},
+		{StatusPartiallyPaid, StatusPaid},
+		{StatusExpired, StatusRefundDue},
 	}
 	for _, c := range ok {
 		if err := Check(c[0], c[1]); err != nil {
@@ -23,6 +27,11 @@ func TestTransitions(t *testing.T) {
 		{StatusPaid, StatusSuccess}, // must pass through VENDING
 		{StatusPending, StatusRefundDue},
 		{StatusAwaitingPayment, StatusVending},
+		{StatusExpired, StatusPaid}, // an expired order is never vended
+		{StatusExpired, StatusVending},
+		{StatusOverpaid, StatusVending}, // wrong amounts are never vended
+		{StatusPartiallyPaid, StatusVending},
+		{StatusPartiallyPaid, StatusExpired}, // the customer did pay something
 	}
 	for _, c := range bad {
 		if err := Check(c[0], c[1]); err == nil {

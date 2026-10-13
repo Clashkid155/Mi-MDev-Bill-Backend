@@ -9,7 +9,8 @@ const (
 	pathValidateMeter = "/api/user/transaction/validate_meter.php"
 	pathSystemData    = "/api/user/system/get_system_data.php"
 
-	// Partner API (not Direct): the only way to look an order up afterwards.
+	// ABS's docs group this under the Partner API, not Direct, but it takes the
+	// same Direct API key; the only way to look an order up afterwards.
 	pathTransaction = "/api/partner/v1/transaction.php"
 )
 

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="supported-color-schemes" content="light">
+<title>Your {{.KindLower}} purchase was successful</title>
+</head>
+<body style="margin:0;padding:0;background-color:#F2F2F0;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{.Preheader}}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F2F2F0;">
+<tr><td align="center" style="padding:24px 12px;">
+
+<!-- Mi MDev design tokens (light): bg #F2F2F0, surface #FFFFFF, ink #1C1C1A, ink-2 #5C5C57, line #E5E5E0,
+     yellow #D9A72C (#E6B24E on the dark header), card radius 20. Display type Sora, body type Manrope. -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background-color:#FFFFFF;border:1px solid #E5E5E0;border-radius:20px;border-collapse:separate;overflow:hidden;">
+
+<!-- Header: the Mi MDev mark (five rounded bars on one baseline) and wordmark, built from table cells so it shows even when images are blocked -->
+<tr><td style="background-color:#1C1C1A;padding:22px 32px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+<td valign="bottom" style="padding-right:10px;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+<td valign="bottom"><table role="presentation" width="4" cellpadding="0" cellspacing="0" border="0"><tr><td width="4" height="15" bgcolor="#E6B24E" style="width:4px;height:15px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td></tr></table></td>
+<td width="3" style="width:3px;font-size:0;line-height:0;">&nbsp;</td>
+<td valign="bottom"><table role="presentation" width="4" cellpadding="0" cellspacing="0" border="0"><tr><td width="4" height="24" bgcolor="#E6B24E" style="width:4px;height:24px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td></tr></table></td>
+<td width="3" style="width:3px;font-size:0;line-height:0;">&nbsp;</td>
+<td valign="bottom"><table role="presentation" width="4" cellpadding="0" cellspacing="0" border="0"><tr><td width="4" height="18" bgcolor="#E6B24E" style="width:4px;height:18px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td></tr></table></td>
+<td width="3" style="width:3px;font-size:0;line-height:0;">&nbsp;</td>
+<td valign="bottom"><table role="presentation" width="4" cellpadding="0" cellspacing="0" border="0"><tr><td width="4" height="24" bgcolor="#E6B24E" style="width:4px;height:24px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td></tr></table></td>
+<td width="3" style="width:3px;font-size:0;line-height:0;">&nbsp;</td>
+<td valign="bottom"><table role="presentation" width="4" cellpadding="0" cellspacing="0" border="0"><tr><td width="4" height="15" bgcolor="#E6B24E" style="width:4px;height:15px;font-size:0;line-height:0;border-radius:2px;">&nbsp;</td></tr></table></td>
+</tr></table>
+</td>
+<td valign="bottom" style="font-family:'Sora','Avenir Next','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:17px;font-weight:700;letter-spacing:-0.17px;line-height:20px;color:#F5F1E8;">Mi MDev</td>
+</tr></table>
+</td></tr>
+
+<tr><td style="padding:28px 32px 0 32px;font-family:'Sora','Avenir Next','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:22px;font-weight:600;letter-spacing:-0.22px;line-height:29px;color:#1C1C1A;">Purchase successful</td></tr>
+<tr><td style="padding:8px 32px 0 32px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:23px;color:#5C5C57;">Hi {{.Name}}, your {{.KindLower}} purchase was successful.</td></tr>
+
+<tr><td style="padding:20px 32px 0 32px;font-family:'Sora','Avenir Next','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:34px;font-weight:600;letter-spacing:-0.68px;line-height:37px;color:#1C1C1A;">{{.Amount}}</td></tr>
+
+{{if .Token}}
+<tr><td style="padding:20px 32px 0 32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F2F2F0;border:1px solid #E5E5E0;border-radius:16px;border-collapse:separate;">
+<tr><td style="padding:16px 18px 6px 18px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:700;letter-spacing:0.92px;line-height:16px;text-transform:uppercase;color:#5C5C57;">Your electricity token</td></tr>
+<tr><td style="padding:0 18px 0 18px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:18px;font-weight:700;letter-spacing:0;line-height:26px;color:#1C1C1A;word-break:normal;overflow-wrap:break-word;">{{.Token}}</td></tr>
+{{if .Units}}<tr><td style="padding:4px 18px 0 18px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#5C5C57;">Units: {{.Units}}</td></tr>{{end}}
+<tr><td style="padding:0;font-size:0;line-height:16px;height:16px;">&nbsp;</td></tr>
+</table>
+</td></tr>
+{{else if .RawDelivery}}
+<tr><td style="padding:20px 32px 0 32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F2F2F0;border:1px solid #E5E5E0;border-radius:16px;border-collapse:separate;">
+<tr><td style="padding:16px 18px 6px 18px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:11.5px;font-weight:700;letter-spacing:0.92px;line-height:16px;text-transform:uppercase;color:#5C5C57;">Your token details</td></tr>
+<tr><td style="padding:0 18px 16px 18px;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:14px;line-height:21px;color:#1C1C1A;white-space:pre-wrap;word-break:break-all;">{{.RawDelivery}}</td></tr>
+</table>
+</td></tr>
+{{end}}
+
+<tr><td style="padding:24px 32px 0 32px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+{{if .Network}}<tr><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#5C5C57;width:38%;vertical-align:top;">{{.NetworkLabel}}</td><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;line-height:19px;color:#1C1C1A;vertical-align:top;">{{.Network}}</td></tr>{{end}}
+{{if .Plan}}<tr><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#5C5C57;width:38%;vertical-align:top;">Plan</td><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;line-height:19px;color:#1C1C1A;vertical-align:top;">{{.Plan}}</td></tr>{{end}}
+<tr><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#5C5C57;width:38%;vertical-align:top;">{{.RecipientLabel}}</td><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;line-height:19px;color:#1C1C1A;vertical-align:top;">{{.Recipient}}</td></tr>
+<tr><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#5C5C57;width:38%;vertical-align:top;">Date</td><td style="padding:12px 0;border-top:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;line-height:19px;color:#1C1C1A;vertical-align:top;">{{.Date}}</td></tr>
+<tr><td style="padding:12px 0;border-top:1px solid #E5E5E0;border-bottom:1px solid #E5E5E0;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:19px;color:#5C5C57;width:38%;vertical-align:top;">Reference</td><td style="padding:12px 0;border-top:1px solid #E5E5E0;border-bottom:1px solid #E5E5E0;font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;font-size:13px;line-height:19px;color:#1C1C1A;vertical-align:top;word-break:break-all;">{{.Reference}}</td></tr>
+</table>
+</td></tr>
+
+<tr><td style="padding:24px 32px 0 32px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:#5C5C57;">Need help? Visit our <a href="{{.SupportURL}}" style="color:#1C1C1A;font-weight:600;text-decoration:underline;">support page</a> or find us on X, <a href="{{.XURL}}" style="color:#1C1C1A;font-weight:600;text-decoration:underline;">{{.XHandle}}</a>. Please quote the reference above.</td></tr>
+<tr><td style="padding:12px 32px 0 32px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:21px;color:#5C5C57;">This email can't receive replies. For help, visit our support page.</td></tr>
+
+<tr><td style="padding:24px 32px 28px 32px;font-family:'Manrope','Segoe UI',-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;color:#5C5C57;">This is an automated receipt from Mi MDev. &copy; {{.Year}} Mi MDev</td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>

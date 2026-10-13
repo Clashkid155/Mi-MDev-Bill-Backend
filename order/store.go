@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,6 +25,9 @@ type Order struct {
 	Recipient      string
 	AmountKobo     int64
 	CustomerEmail  string
+	CustomerName   string
+	NetworkName    string // snapshot of the catalog's display name at purchase; ABS renames things
+	PlanName       string // same, for data plans
 	Status         Status
 	InvoiceRef     string
 	TxnRef         string
@@ -51,10 +55,12 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// Databases created before this column existed need it added.
-	if err := addColumnIfMissing(db, "orders", "plan_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		db.Close()
-		return nil, err
+	// Databases created before these columns existed need them added.
+	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name"} {
+		if err := addColumnIfMissing(db, "orders", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -84,13 +90,17 @@ func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// newID is our own order id, and doubles as the invoiceReference /
+// paymentReference we give Monnify, so it appears verbatim in their dashboard
+// and webhooks. "MDEV_" marks it as ours, the way Monnify's own generated
+// transactionReference is marked "MNFY|...".
 func newID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return hex.EncodeToString(b)
+	return "MDEV_" + hex.EncodeToString(b)
 }
 
-const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, customer_email, status,
+const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, customer_email, customer_name, network_name, plan_name, status,
 	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response,
 	created_at, updated_at`
 
@@ -99,7 +109,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var status string
 	var expires, created, updated int64
 	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CustomerEmail,
-		&status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
+		&o.CustomerName, &o.NetworkName, &o.PlanName, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
 		&expires, &o.VendResponse, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, ErrNotFound
@@ -126,14 +136,59 @@ func (s *Store) ByTxnRef(ctx context.Context, txnRef string) (Order, error) {
 	return scanOrder(s.db.QueryRowContext(ctx, `SELECT `+orderColumns+` FROM orders WHERE txn_ref = ?`, txnRef))
 }
 
+// List returns orders, newest first, optionally only those in the given statuses.
+func (s *Store) List(ctx context.Context, statuses []Status, limit int) ([]Order, error) {
+	query, args := `SELECT `+orderColumns+` FROM orders`, []any{}
+	if len(statuses) > 0 {
+		query += ` WHERE status IN (?` + strings.Repeat(",?", len(statuses)-1) + `)`
+		for _, st := range statuses {
+			args = append(args, string(st))
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, query+` ORDER BY created_at DESC, id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var orders []Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+// AwaitingPastExpiry returns orders still waiting for payment whose payment
+// window ended before `now`, oldest first.
+func (s *Store) AwaitingPastExpiry(ctx context.Context, now time.Time, limit int) ([]Order, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+orderColumns+` FROM orders WHERE status = ? AND expires_at < ?
+		ORDER BY expires_at LIMIT ?`, StatusAwaitingPayment, now.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var orders []Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
 // Insert stores a new INITIATED order and fills in its ID and timestamps.
 func (s *Store) Insert(ctx context.Context, o *Order) error {
 	now := time.Now()
 	o.ID, o.Status, o.CreatedAt, o.UpdatedAt = newID(), StatusInitiated, now, now
 	_, err := s.db.ExecContext(ctx, `INSERT INTO orders
-		(id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, customer_email, status, expires_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		o.ID, o.IdempotencyKey, o.Kind, o.Network, o.PlanID, o.Recipient, o.AmountKobo, o.CustomerEmail, o.Status,
+		(id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, customer_email, customer_name, network_name, plan_name, status, expires_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		o.ID, o.IdempotencyKey, o.Kind, o.Network, o.PlanID, o.Recipient, o.AmountKobo, o.CustomerEmail, o.CustomerName, o.NetworkName, o.PlanName, o.Status,
 		o.ExpiresAt.Unix(), now.Unix(), now.Unix())
 	return err
 }
@@ -183,6 +238,35 @@ func (s *Store) MoveWithVendResponse(ctx context.Context, id string, from, to St
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+type WebhookEvent struct {
+	ID         int64
+	Provider   string
+	EventKey   string
+	Body       string
+	ReceivedAt time.Time
+}
+
+// Webhooks returns the saved webhooks, newest first, optionally only one provider's.
+func (s *Store) Webhooks(ctx context.Context, provider string, limit int) ([]WebhookEvent, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, provider, event_key, body, received_at FROM webhook_events
+		WHERE ? = '' OR provider = ? ORDER BY id DESC LIMIT ?`, provider, provider, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var events []WebhookEvent
+	for rows.Next() {
+		var e WebhookEvent
+		var received int64
+		if err := rows.Scan(&e.ID, &e.Provider, &e.EventKey, &e.Body, &received); err != nil {
+			return nil, err
+		}
+		e.ReceivedAt = time.Unix(received, 0)
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 func (s *Store) LogWebhook(ctx context.Context, provider, eventKey string, body []byte) error {

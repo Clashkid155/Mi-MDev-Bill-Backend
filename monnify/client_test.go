@@ -86,6 +86,31 @@ func TestRelogsInOn401(t *testing.T) {
 	}
 }
 
+// Monnify sends amounts as numbers in some replies and as strings in others.
+func TestGetTransactionAcceptsNumericAndStringAmounts(t *testing.T) {
+	for name, amounts := range map[string]string{
+		"numbers": `"amountPaid":50,"totalPayable":50`,
+		"strings": `"amountPaid":"50.00","totalPayable":"50"`,
+		"mixed":   `"amountPaid":"50.00","totalPayable":50.0`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/auth/login" {
+				w.Write([]byte(`{"requestSuccessful":true,"responseBody":{"accessToken":"t","expiresIn":3600}}`))
+				return
+			}
+			if r.URL.EscapedPath() != "/api/v2/transactions/MNFY%7C09%7C1" {
+				t.Errorf("%s: path %s", name, r.URL.EscapedPath())
+			}
+			w.Write([]byte(`{"requestSuccessful":true,"responseBody":{"transactionReference":"MNFY|09|1","paymentReference":"o1","paymentStatus":"PAID",` + amounts + `}}`))
+		}))
+		txn, err := New(srv.URL, "k", "s", "CC").GetTransaction(context.Background(), "MNFY|09|1")
+		srv.Close()
+		if err != nil || txn.Status != "PAID" || txn.AmountPaidKobo != 5000 || txn.TotalKobo != 5000 {
+			t.Errorf("%s: %+v %v", name, txn, err)
+		}
+	}
+}
+
 func TestErrorResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/auth/login" {

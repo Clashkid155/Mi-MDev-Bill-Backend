@@ -10,9 +10,11 @@ import (
 )
 
 // CheckTransaction looks up an order ABS has already accepted, using the order
-// id ABS gave it (the "ident" / webhook "order_id", e.g. BD2026...). This is a
-// Partner API call, not part of Direct, and it is the way to settle an order
-// left PROCESSING after a timeout.
+// id ABS gave it (the "ident" / webhook "order_id", e.g. BD2026...). ABS's own
+// docs list this path under the Partner API rather than Direct, but it is
+// authenticated with the same Direct API key as every other call here, no
+// separate Partner credential exists in this client. It is the way to settle
+// an order left PROCESSING after a timeout.
 //
 // ABS answers successful, Processing, failed or Refund. An error means ABS
 // could not be asked or answered unreadably; that is not an order state.

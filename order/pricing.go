@@ -43,6 +43,9 @@ type CreateRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 	Kind           string `json:"kind"`
 	Email          string `json:"email"`
+	// CustomerName is optional; without it Monnify is given the part of the
+	// email before the @.
+	CustomerName string `json:"customer_name"`
 
 	Network    string `json:"network"`
 	PlanID     string `json:"plan_id"`
@@ -51,12 +54,17 @@ type CreateRequest struct {
 	AmountKobo int64  `json:"amount_kobo"`
 }
 
+const maxCustomerName = 100
+
 func (r CreateRequest) validate() error {
 	if strings.TrimSpace(r.IdempotencyKey) == "" {
 		return InvalidError{"idempotency_key is required"}
 	}
 	if _, err := mail.ParseAddress(r.Email); err != nil {
 		return InvalidError{"a valid email is required"}
+	}
+	if len([]rune(strings.TrimSpace(r.CustomerName))) > maxCustomerName {
+		return InvalidError{fmt.Sprintf("customer_name must be at most %d characters", maxCustomerName)}
 	}
 	switch r.Kind {
 	case KindAirtime, KindData, KindElectricity:
@@ -65,12 +73,46 @@ func (r CreateRequest) validate() error {
 	return InvalidError{"kind must be airtime, data or electricity"}
 }
 
+// withinMinimumPayment is the catalog the app is shown when the payment
+// provider has a minimum payment (Kora: ₦100). Data plans that cost less
+// cannot be paid for, so they are left out, along with any category that
+// ends up empty. Prices are never changed. A minimum of 0 returns the catalog as is.
+func withinMinimumPayment(c abs.Catalog, minPayment int64) abs.Catalog {
+	if minPayment <= 0 {
+		return c
+	}
+	networks := make([]abs.DataNetwork, 0, len(c.Data))
+	for _, network := range c.Data {
+		kept := network
+		kept.Categories = nil
+		for _, category := range network.Categories {
+			plans := make([]abs.DataPlan, 0, len(category.Plans))
+			for _, plan := range category.Plans {
+				if plan.PriceKobo >= minPayment {
+					plans = append(plans, plan)
+				}
+			}
+			if len(plans) > 0 {
+				kept.Categories = append(kept.Categories, abs.DataCategory{Name: category.Name, Plans: plans})
+			}
+		}
+		networks = append(networks, kept)
+	}
+	c.Data = networks
+	return c
+}
+
 // product is what an order buys, worked out from the request and the catalog.
 type product struct {
 	Network    string
 	PlanID     string
 	Recipient  string
 	AmountKobo int64
+	// Display names as the catalog has them right now. They are stored on the
+	// order as a snapshot, so a receipt still says what was bought after ABS
+	// renames or removes it.
+	NetworkName string
+	PlanName    string
 }
 
 // resolve checks the request against ABS's live catalog and works out what is
@@ -82,29 +124,30 @@ func (s *Service) resolve(ctx context.Context, r CreateRequest) (product, error)
 	}
 	switch r.Kind {
 	case KindAirtime:
-		return resolveAirtime(catalog, r)
+		return resolveAirtime(catalog, r, s.MinPaymentKobo)
 	case KindData:
-		return resolveData(catalog, r)
+		return resolveData(catalog, r, s.MinPaymentKobo)
 	default:
-		return resolveElectricity(catalog, r)
+		return resolveElectricity(catalog, r, s.MinPaymentKobo)
 	}
 }
 
-func resolveAirtime(catalog abs.Catalog, r CreateRequest) (product, error) {
-	if _, ok := catalog.FindAirtimeNetwork(r.Network); !ok {
+func resolveAirtime(catalog abs.Catalog, r CreateRequest, minPayment int64) (product, error) {
+	network, ok := catalog.FindAirtimeNetwork(r.Network)
+	if !ok {
 		return product{}, InvalidError{"unknown airtime network"}
 	}
 	phone := strings.TrimSpace(r.Recipient)
 	if !abs.ValidRecipient("phone", phone) {
 		return product{}, InvalidError{"recipient must be an 11-digit phone number like 08012345678"}
 	}
-	if r.AmountKobo < minAirtimeKobo || r.AmountKobo%kobo != 0 {
-		return product{}, InvalidError{"amount must be at least ₦50, in whole naira"}
+	if minimum := max(minAirtimeKobo, minPayment); r.AmountKobo < minimum || r.AmountKobo%kobo != 0 {
+		return product{}, InvalidError{fmt.Sprintf("amount must be at least ₦%d, in whole naira", minimum/kobo)}
 	}
-	return product{Network: r.Network, Recipient: phone, AmountKobo: r.AmountKobo}, nil
+	return product{Network: r.Network, Recipient: phone, AmountKobo: r.AmountKobo, NetworkName: network.Name}, nil
 }
 
-func resolveData(catalog abs.Catalog, r CreateRequest) (product, error) {
+func resolveData(catalog abs.Catalog, r CreateRequest, minPayment int64) (product, error) {
 	network, plan, ok := catalog.FindDataPlan(r.PlanID)
 	if !ok {
 		return product{}, InvalidError{"unknown data plan"}
@@ -120,25 +163,30 @@ func resolveData(catalog abs.Catalog, r CreateRequest) (product, error) {
 	if plan.PriceKobo <= 0 {
 		return product{}, InvalidError{"this plan has no price right now"}
 	}
-	return product{Network: network.ID, PlanID: plan.ID, Recipient: recipient, AmountKobo: plan.PriceKobo}, nil
+	if plan.PriceKobo < minPayment {
+		return product{}, InvalidError{"this plan costs less than the minimum payment and cannot be bought"}
+	}
+	return product{Network: network.ID, PlanID: plan.ID, Recipient: recipient, AmountKobo: plan.PriceKobo,
+		NetworkName: network.Name, PlanName: plan.Name}, nil
 }
 
 // resolveElectricity checks the request's shape only. It does not call ABS's
 // validate-meter endpoint: the app already validated the meter with
 // POST /v1/meters/validate and showed the owner to the customer, so asking
 // ABS again here would be a second, redundant round trip.
-func resolveElectricity(catalog abs.Catalog, r CreateRequest) (product, error) {
-	if _, ok := catalog.FindElectricityService(r.ServiceID); !ok {
+func resolveElectricity(catalog abs.Catalog, r CreateRequest, minPayment int64) (product, error) {
+	service, ok := catalog.FindElectricityService(r.ServiceID)
+	if !ok {
 		return product{}, InvalidError{"unknown electricity service"}
 	}
 	meter := strings.TrimSpace(r.Recipient)
 	if !meterNumber.MatchString(meter) {
 		return product{}, InvalidError{"recipient must be a meter number (digits only, at least 6)"}
 	}
-	if r.AmountKobo < minElectricityKobo || r.AmountKobo%kobo != 0 {
-		return product{}, InvalidError{"amount must be at least ₦1000, in whole naira"}
+	if minimum := max(minElectricityKobo, minPayment); r.AmountKobo < minimum || r.AmountKobo%kobo != 0 {
+		return product{}, InvalidError{fmt.Sprintf("amount must be at least ₦%d, in whole naira", minimum/kobo)}
 	}
-	return product{Network: r.ServiceID, Recipient: meter, AmountKobo: r.AmountKobo}, nil
+	return product{Network: r.ServiceID, Recipient: meter, AmountKobo: r.AmountKobo, NetworkName: service.Name}, nil
 }
 
 // ValidateMeter asks ABS who a meter belongs to (free, nothing is charged), for

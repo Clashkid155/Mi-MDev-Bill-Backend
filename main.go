@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"Bills-Backend/abs"
+	"Bills-Backend/email"
 	"Bills-Backend/logging"
 	"Bills-Backend/monnify"
 	"Bills-Backend/order"
@@ -42,12 +43,30 @@ func serve(cfg Config, log *slog.Logger) {
 	vendor := abs.New(cfg.ABSBaseURL, cfg.ABSAPIKey, cfg.ABSSandbox)
 	payments.Log, vendor.Log = log, log
 
+	// Mailer is nil (and the purchase-successful email skipped) until
+	// ZEPTOMAIL_TOKEN and MAIL_FROM_EMAIL are both set; see Config.MailConfigured.
+	var mailer *email.Client
+	if cfg.MailConfigured() {
+		mailer = email.New(email.Settings{
+			BaseURL: cfg.MailBaseURL, Token: cfg.MailToken, FromEmail: cfg.MailFromEmail,
+			FromName: cfg.MailFromName, BounceAddress: cfg.MailBounceAddress, Sandbox: cfg.MailSandbox,
+		})
+		mailer.Log = log
+		if cfg.MailSandbox {
+			log.Info("Config", "detail", "email in sandbox: receipts are logged, not sent (MAIL_SANDBOX=false to send)")
+		}
+	} else {
+		log.Info("Config", "detail", "email disabled: ZEPTOMAIL_TOKEN/MAIL_FROM_EMAIL not set")
+	}
+
 	api := &order.API{
 		Service: &order.Service{
-			Store:  store,
-			Pay:    payments,
-			Vendor: vendor,
-			Log:    log,
+			Store:          store,
+			Pay:            payments,
+			Vendor:         vendor,
+			Log:            log,
+			Mailer:         mailer,
+			MinPaymentKobo: cfg.MinPaymentKobo,
 		},
 		MonnifySecret:          cfg.MonnifySecretKey,
 		VerifyMonnifySignature: cfg.IsProduction(),
@@ -64,13 +83,20 @@ func serve(cfg Config, log *slog.Logger) {
 	direct := http.NewServeMux()
 	vendor.RegisterDirectRoutes(direct)
 	payments.RegisterDirectRoutes(direct)
+	if mailer != nil {
+		mailer.RegisterDirectRoutes(direct)
+	}
 	mux.Handle("/abs/", requireAdmin(cfg.AdminToken, direct))
 	mux.Handle("/monnify/", requireAdmin(cfg.AdminToken, direct))
+	mux.Handle("/email/", requireAdmin(cfg.AdminToken, direct))
+	mux.Handle("/admin/", requireAdmin(cfg.AdminToken, api.AdminRoutes()))
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: logging.Requests(log, mux), ReadHeaderTimeout: 5 * time.Second}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go api.Sweep(ctx, 5*time.Minute)
 
 	go func() {
 		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox))

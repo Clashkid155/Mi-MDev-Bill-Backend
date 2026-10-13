@@ -16,6 +16,7 @@ import (
 //	POST   /monnify/invoice              {"amount_naira","email","name","description","reference","expires_in_minutes"}
 //	GET    /monnify/invoice/{reference}
 //	DELETE /monnify/invoice/{reference}
+//	GET    /monnify/transaction/{reference}   (the transaction_reference, e.g. MNFY|09|...)
 //
 // Only amount_naira and email are required. reference defaults to a generated
 // one, expires_in_minutes to 30.
@@ -23,6 +24,25 @@ func (c *Client) RegisterDirectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /monnify/invoice", c.handleCreateInvoice)
 	mux.HandleFunc("GET /monnify/invoice/{reference}", c.handleGetInvoice)
 	mux.HandleFunc("DELETE /monnify/invoice/{reference}", c.handleCancelInvoice)
+	mux.HandleFunc("GET /monnify/transaction/{reference}", c.handleGetTransaction)
+}
+
+type transactionReply struct {
+	Reference       string  `json:"transaction_reference"`
+	PaymentRef      string  `json:"payment_reference"`
+	Status          string  `json:"payment_status"`
+	AmountPaidNaira float64 `json:"amount_paid_naira"`
+	TotalNaira      float64 `json:"total_payable_naira"`
+}
+
+func (c *Client) handleGetTransaction(w http.ResponseWriter, r *http.Request) {
+	t, err := c.GetTransaction(r.Context(), r.PathValue("reference"))
+	if err != nil {
+		reply.Fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	reply.OK(w, http.StatusOK, transactionReply{t.Reference, t.PaymentRef, t.Status,
+		float64(t.AmountPaidKobo) / 100, float64(t.TotalKobo) / 100})
 }
 
 // invoiceReply is the invoice with amounts shown in naira for easy reading.

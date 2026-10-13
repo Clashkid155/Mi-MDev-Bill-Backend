@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -230,6 +232,56 @@ func (c *Client) GetInvoice(ctx context.Context, reference string) (Invoice, err
 		return Invoice{}, err
 	}
 	return out.toInvoice(), nil
+}
+
+// naira reads an amount that Monnify sometimes sends as a number (50) and
+// sometimes as a string ("50.00"), even within the same kind of reply.
+type naira float64
+
+func (n *naira) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), `"`)
+	if s == "" || s == "null" {
+		*n = 0
+		return nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("monnify: bad amount %s", b)
+	}
+	*n = naira(f)
+	return nil
+}
+
+// Transaction is what Monnify says about one payment attempt. Unlike the
+// invoice (whose amount is what we asked for), it says how much was really paid.
+type Transaction struct {
+	Reference      string
+	PaymentRef     string // our invoice reference, i.e. the order id
+	Status         string // PAID, OVERPAID, PARTIALLY_PAID, PENDING, FAILED, REVERSED, EXPIRED
+	AmountPaidKobo int64
+	TotalKobo      int64 // what was due
+}
+
+// GetTransaction verifies a payment by the transactionReference Monnify issued
+// for the invoice. This is the check to trust before delivering anything.
+func (c *Client) GetTransaction(ctx context.Context, txnReference string) (Transaction, error) {
+	var out struct {
+		TransactionReference string `json:"transactionReference"`
+		PaymentReference     string `json:"paymentReference"`
+		PaymentStatus        string `json:"paymentStatus"`
+		AmountPaid           naira  `json:"amountPaid"`
+		TotalPayable         naira  `json:"totalPayable"`
+	}
+	if err := c.authedRequest(ctx, http.MethodGet, pathTransaction(txnReference), nil, &out); err != nil {
+		return Transaction{}, err
+	}
+	return Transaction{
+		Reference:      out.TransactionReference,
+		PaymentRef:     out.PaymentReference,
+		Status:         out.PaymentStatus,
+		AmountPaidKobo: int64(math.Round(float64(out.AmountPaid) * 100)),
+		TotalKobo:      int64(math.Round(float64(out.TotalPayable) * 100)),
+	}, nil
 }
 
 func (c *Client) CancelInvoice(ctx context.Context, reference string) error {
