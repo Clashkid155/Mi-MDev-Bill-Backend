@@ -22,6 +22,10 @@ type Catalog struct {
 	// Recipients describes each kind of recipient a plan can be bought for, so
 	// the app can label and check the input field. Plans refer to it by name.
 	Recipients map[string]RecipientFormat `json:"recipients"`
+
+	// ChargingFees names the electricity services left out because ABS adds a fee
+	// on top of the amount (see hasFee). Not sent to the app; for the logs.
+	ChargingFees []string `json:"-"`
 }
 
 type RecipientFormat struct {
@@ -118,6 +122,10 @@ func (c *Client) Catalog(ctx context.Context) (Catalog, error) {
 		var fresh Catalog
 		if fresh, err = parseCatalog(raw); err == nil {
 			c.catalog, c.catalogAt = &fresh, time.Now()
+			if c.Log != nil && len(fresh.ChargingFees) > 0 {
+				c.Log.Info("Catalog - ABS", "detail", fmt.Sprintf("left out %d electricity services that charge a fee: %s",
+					len(fresh.ChargingFees), strings.Join(fresh.ChargingFees, ", ")))
+			}
 			return fresh, nil
 		}
 	}
@@ -159,6 +167,11 @@ func parseCatalog(raw json.RawMessage) (Catalog, error) {
 			Services []struct {
 				TrackID string `json:"trackid"`
 				Name    string `json:"name"`
+				// ABS does not document these. On electricity they are 0 for most DISCOs
+				// and 50, 100 or 150 for a few, and a purchase through one of those took
+				// 1100 from the wallet for a 1000 meter top-up: a fee the app never shows.
+				Fee      json.RawMessage `json:"sellatwhatpercentoff"`
+				AgentFee json.RawMessage `json:"percentoffforagent"`
 			} `json:"servicedata"`
 		} `json:"electricity_providers"`
 	}
@@ -205,6 +218,10 @@ func parseCatalog(raw json.RawMessage) (Catalog, error) {
 		}
 		region := ElectricityRegion{Name: r.Name, Services: []ElectricityService{}}
 		for _, s := range r.Services {
+			if hasFee(s.Fee) || hasFee(s.AgentFee) {
+				out.ChargingFees = append(out.ChargingFees, r.Name+" "+s.Name)
+				continue
+			}
 			region.Services = append(region.Services, ElectricityService{ID: s.TrackID, Name: s.Name, Kind: electricityKind(s.Name)})
 		}
 		if len(region.Services) > 0 {
@@ -338,6 +355,18 @@ func nairaToKobo(naira string) (int64, bool) {
 		return 0, false
 	}
 	return int64(math.Round(value * 100)), true
+}
+
+// hasFee reports whether an electricity service's fee field says ABS charges
+// extra. Missing, empty or zero means no fee; a number above zero is a fee, and
+// so is anything unreadable, since a fee we cannot see is the case to avoid.
+func hasFee(raw json.RawMessage) bool {
+	text := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if text == "" || text == "null" {
+		return false
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+	return err != nil || value != 0
 }
 
 func electricityKind(name string) string {

@@ -86,8 +86,16 @@ func TestParseCatalog(t *testing.T) {
 	if len(c.Electricity) != 2 || c.Electricity[0].Name != "Oyo" || c.Electricity[1].Name != "NESCO" {
 		t.Fatalf("electricity should keep only Oyo and NESCO: %+v", c.Electricity)
 	}
-	if c.Electricity[0].Services[0].Kind != "postpaid" || c.Electricity[0].Services[1].Kind != "prepaid" || c.Electricity[1].Services[0].Kind != "" {
-		t.Errorf("kinds: %+v", c.Electricity)
+	// The postpaid service carries a fee of 100, so only the prepaid one is offered.
+	if len(c.Electricity[0].Services) != 1 || c.Electricity[0].Services[0].ID != "SVSUEMYU" ||
+		c.Electricity[0].Services[0].Kind != "prepaid" || c.Electricity[1].Services[0].Kind != "" {
+		t.Errorf("services: %+v", c.Electricity)
+	}
+	if len(c.ChargingFees) != 1 || !strings.Contains(c.ChargingFees[0], "postpaid") {
+		t.Errorf("services left out for their fee: %v", c.ChargingFees)
+	}
+	if _, ok := c.FindElectricityService("AST36VAN"); ok {
+		t.Error("a service that charges a fee must not be orderable")
 	}
 
 	// Nothing from the dropped sections, or ABS's internal fields, may leak out.
@@ -303,4 +311,37 @@ func mustExtractData(t *testing.T, envelope string) string {
 		t.Fatal(err)
 	}
 	return string(wrapper.Data)
+}
+
+func TestElectricityServicesThatChargeAFeeAreLeftOut(t *testing.T) {
+	cases := []struct {
+		name string
+		json string // the fee fields of one service
+		kept bool
+	}{
+		{"no fee fields", ``, true},
+		{"zero string", `,"sellatwhatpercentoff":"0"`, true},
+		{"zero decimals", `,"sellatwhatpercentoff":"0.00","percentoffforagent":"0.00"`, true},
+		{"zero number", `,"sellatwhatpercentoff":0,"percentoffforagent":0`, true},
+		{"empty and null", `,"sellatwhatpercentoff":"","percentoffforagent":null`, true},
+		{"fee as string", `,"sellatwhatpercentoff":"100"`, false},
+		{"fee as number", `,"sellatwhatpercentoff":150`, false},
+		{"fee with decimals", `,"sellatwhatpercentoff":"50.00"`, false},
+		{"agent fee only", `,"sellatwhatpercentoff":"0","percentoffforagent":"50"`, false},
+		{"unreadable is treated as a fee", `,"sellatwhatpercentoff":"n/a"`, false},
+	}
+	for _, c := range cases {
+		raw := `{"electricity_providers":[{"name":"Oyo","servicedata":[{"trackid":"S1","name":"IBEDC(prepaid)"` + c.json + `}]}]}`
+		cat, err := parseCatalog(json.RawMessage(raw))
+		if err != nil {
+			t.Fatal(c.name, err)
+		}
+		_, found := cat.FindElectricityService("S1")
+		if found != c.kept {
+			t.Errorf("%s: offered = %t, want %t", c.name, found, c.kept)
+		}
+		if !c.kept && len(cat.Electricity) != 0 {
+			t.Errorf("%s: a region with nothing left to offer must be dropped: %+v", c.name, cat.Electricity)
+		}
+	}
 }
