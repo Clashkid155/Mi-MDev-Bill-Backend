@@ -13,9 +13,11 @@ import (
 
 	"Bills-Backend/abs"
 	"Bills-Backend/email"
+	"Bills-Backend/kora"
 	"Bills-Backend/logging"
 	"Bills-Backend/monnify"
 	"Bills-Backend/order"
+	"Bills-Backend/payment"
 	"Bills-Backend/reply"
 )
 
@@ -39,9 +41,26 @@ func serve(cfg Config, log *slog.Logger) {
 	}
 	defer store.Close()
 
-	payments := monnify.New(cfg.MonnifyBaseURL, cfg.MonnifyAPIKey, cfg.MonnifySecretKey, cfg.MonnifyContractCode)
 	vendor := abs.New(cfg.ABSBaseURL, cfg.ABSAPIKey, cfg.ABSSandbox)
-	payments.Log, vendor.Log = log, log
+	vendor.Log = log
+	// Only the chosen provider is built; the others' keys can stay empty.
+	var payments payment.Provider
+	var direct *http.ServeMux
+	switch cfg.PaymentProvider {
+	case "kora":
+		k := kora.New(cfg.KoraBaseURL, cfg.KoraSecretKey)
+		k.Log = log
+		payments = k
+		direct = http.NewServeMux()
+		k.RegisterDirectRoutes(direct)
+	default:
+		m := monnify.New(cfg.MonnifyBaseURL, cfg.MonnifyAPIKey, cfg.MonnifySecretKey, cfg.MonnifyContractCode)
+		m.Log = log
+		payments = m
+		direct = http.NewServeMux()
+		m.RegisterDirectRoutes(direct)
+	}
+	log.Info("Config", "detail", "payments by "+cfg.PaymentProvider)
 
 	// Mailer is nil (and the purchase-successful email skipped) until
 	// ZEPTOMAIL_TOKEN and MAIL_FROM_EMAIL are both set; see Config.MailConfigured.
@@ -71,6 +90,7 @@ func serve(cfg Config, log *slog.Logger) {
 		MonnifySecret:          cfg.MonnifySecretKey,
 		VerifyMonnifySignature: cfg.IsProduction(),
 		ABSWebhookSecret:       cfg.ABSWebhookSecret,
+		KoraSecret:             cfg.KoraSecretKey,
 	}
 
 	mux := http.NewServeMux()
@@ -78,17 +98,19 @@ func serve(cfg Config, log *slog.Logger) {
 		reply.OKWithMessage(w, http.StatusOK, "ok", nil)
 	})
 	mux.Handle("/", api.Routes())
-	// Direct access to the providers. Same in every environment; the ABS sandbox
-	// setting decides whether purchases are real. Protected by the admin token.
-	direct := http.NewServeMux()
-	vendor.RegisterDirectRoutes(direct)
-	payments.RegisterDirectRoutes(direct)
-	if mailer != nil {
-		mailer.RegisterDirectRoutes(direct)
+	// Direct access to the providers, for curl and Postman. These can spend real
+	// money, so they are only served while nothing real is at stake.
+	if cfg.RealMoney() {
+		log.Info("Server", "detail", "direct /abs, /monnify and /email endpoints are off while real money is in use")
+	} else {
+		vendor.RegisterDirectRoutes(direct)
+		if mailer != nil {
+			mailer.RegisterDirectRoutes(direct)
+		}
+		for _, prefix := range []string{"/abs/", "/monnify/", "/kora/", "/email/"} {
+			mux.Handle(prefix, requireAdmin(cfg.AdminToken, direct))
+		}
 	}
-	mux.Handle("/abs/", requireAdmin(cfg.AdminToken, direct))
-	mux.Handle("/monnify/", requireAdmin(cfg.AdminToken, direct))
-	mux.Handle("/email/", requireAdmin(cfg.AdminToken, direct))
 	mux.Handle("/admin/", requireAdmin(cfg.AdminToken, api.AdminRoutes()))
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: logging.Requests(log, mux), ReadHeaderTimeout: 5 * time.Second}

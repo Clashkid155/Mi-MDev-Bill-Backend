@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"Bills-Backend/abs"
+	"Bills-Backend/kora"
 	"Bills-Backend/monnify"
 	"Bills-Backend/reply"
 )
@@ -29,6 +30,9 @@ type API struct {
 	// sandbox webhooks; ConfirmPayment still re-checks every payment with Monnify.
 	VerifyMonnifySignature bool
 	ABSWebhookSecret       string // empty skips signature checks (sandbox only)
+	// KoraSecret is Kora's secret key; it signs Kora's webhooks, test ones too.
+	// Empty means Kora is not in use and its webhook is refused.
+	KoraSecret string
 
 	vending     sync.WaitGroup
 	lastChecked sync.Map // order id -> when Monnify was last asked about it
@@ -46,6 +50,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/catalog", a.catalog)
 	mux.HandleFunc("POST /v1/meters/validate", a.validateMeter)
 	mux.HandleFunc("POST /webhooks/monnify", a.monnifyWebhook)
+	mux.HandleFunc("POST /webhooks/kora", a.koraWebhook)
 	mux.HandleFunc("POST /webhooks/abs", a.absWebhook)
 	return mux
 }
@@ -338,6 +343,57 @@ func (a *API) monnifyWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.Log.Error("MonnifyWebhook - API", "detail", "could not confirm payment: "+err.Error())
 		reply.Fail(w, http.StatusInternalServerError, "could not confirm payment") // Monnify will retry
+		return
+	}
+	if o != nil {
+		a.vendInBackground(*o)
+	}
+	reply.OK(w, http.StatusOK, nil)
+}
+
+// koraWebhook handles Kora's charge.success and charge.failed events. Kora signs
+// the data object with the secret key and retries for up to 72 hours until it
+// gets a 200, so the same event can arrive many times; ConfirmPayment ignores
+// an order that has already moved on.
+func (a *API) koraWebhook(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		reply.Fail(w, http.StatusBadRequest, "unreadable body")
+		return
+	}
+	if a.KoraSecret == "" {
+		reply.Fail(w, http.StatusServiceUnavailable, "kora is not configured")
+		return
+	}
+	if err := kora.VerifyWebhook(a.KoraSecret, r.Header, body); err != nil {
+		a.Log.Warn("Webhook - Kora", "detail", "rejected: "+err.Error())
+		reply.Fail(w, http.StatusUnauthorized, "bad signature")
+		return
+	}
+	var event struct {
+		Event string `json:"event"`
+		Data  struct {
+			Reference        string `json:"reference"` // our order id
+			PaymentReference string `json:"payment_reference"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(body, &event) != nil {
+		reply.Fail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := a.Store.LogWebhook(r.Context(), "kora", event.Data.Reference, body); err != nil {
+		a.Log.Error("Webhook - API", "detail", "could not save webhook: "+err.Error())
+	}
+	if event.Event != "charge.success" {
+		a.Log.Info("Webhook - Kora", "detail", fmt.Sprintf("ignoring %s event (order %s)", event.Event, event.Data.Reference))
+		reply.OK(w, http.StatusOK, nil)
+		return
+	}
+	// Kora is asked what really happened; the webhook's amount is only ever what we requested.
+	o, err := a.ConfirmPayment(r.Context(), event.Data.Reference, event.Data.PaymentReference)
+	if err != nil {
+		a.Log.Error("KoraWebhook - API", "detail", "could not confirm payment: "+err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "could not confirm payment") // Kora will retry
 		return
 	}
 	if o != nil {

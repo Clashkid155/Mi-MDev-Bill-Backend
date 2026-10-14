@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "Bills Backend",
-		"description": "Test calls for the Mi MDev bills backend. Start the server with `go run .` (APP_ENV=sandbox). The app does not use ABS vouchers; the /abs/voucher request under \"ABS Vendor (direct)\" is only for testing ABS itself. The /abs and /monnify folders call the providers directly and need the admin token when ADMIN_TOKEN is set. Every response uses one envelope: {\"status\":\"successful\"|\"failed\",\"message\":\"...\",\"data\":{...},\"error\":\"...\"}. Look under `data` for the actual payload (order id, invoice reference, etc.); `error` is only present when status is \"failed\".",
+		"description": "Test calls for the Mi MDev bills backend. Start the server with `go run .` (APP_ENV=sandbox). The app does not use ABS vouchers; the /abs/voucher request under \"ABS Vendor (direct)\" is only for testing ABS itself. The /abs, /monnify, /kora and /email folders call the providers directly and need the admin token when ADMIN_TOKEN is set; the server only serves them while APP_ENV=sandbox and ABS_SANDBOX=true. The /admin requests are always served and always need the token in production. Every response uses one envelope: {\"status\":\"successful\"|\"failed\",\"message\":\"...\",\"data\":{...},\"error\":\"...\"}. Look under `data` for the actual payload (order id, invoice reference, etc.); `error` is only present when status is \"failed\".",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -27,6 +27,14 @@
 		},
 		{
 			"key": "adminToken",
+			"value": ""
+		},
+		{
+			"key": "koraReference",
+			"value": ""
+		},
+		{
+			"key": "koraSecretKey",
 			"value": ""
 		}
 	],
@@ -392,6 +400,74 @@
 			]
 		},
 		{
+			"name": "Kora (direct)",
+			"item": [
+				{
+					"name": "Create charge",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/kora/charge",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"kora",
+								"charge"
+							]
+						},
+						"description": "Needs PAYMENT_PROVIDER=kora and a Kora test secret key. Asks Kora for a one-time bank account. Optional: name, reference (at least 8 characters). In test mode Kora pays it for you after about 2 minutes. This is also the first call to run: it settles the endpoint path, which Kora's text guide does not print.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount_naira\": 100,\n  \"email\": \"test@example.com\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.reference) pm.collectionVariables.set('koraReference', r.data.reference);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Get charge",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/kora/charge/{{koraReference}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"kora",
+								"charge",
+								"{{koraReference}}"
+							]
+						},
+						"description": "Kora's Transaction Query. status is PAID, PENDING or FAILED; amount_accepted_naira is the amount we may give value for (Kora's amount_accepted)."
+					}
+				}
+			]
+		},
+		{
 			"name": "Orders (app API)",
 			"item": [
 				{
@@ -734,6 +810,51 @@
 						},
 						"description": "Sandbox only: signatures are not checked outside production. Set transactionReference to the one returned by Create order. The backend still asks Monnify whether the invoice is really PAID, so an unpaid invoice will not vend."
 					}
+				},
+				{
+					"name": "Kora: successful payment (simulated)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/webhooks/kora",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"webhooks",
+								"kora"
+							]
+						},
+						"description": "Kora webhooks are always signature checked. The pre-request script signs the data object with the koraSecretKey variable (HMAC SHA256, hex) and sets x-korapay-signature. Set orderId to the id from Create order. The backend still asks Kora what was really paid, so an unpaid order will not vend.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"event\": \"charge.success\",\n  \"data\": {\n    \"reference\": \"{{orderId}}\",\n    \"payment_reference\": \"{{orderId}}\",\n    \"currency\": \"NGN\",\n    \"amount\": 100,\n    \"fee\": 1.5,\n    \"status\": \"success\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const body = JSON.parse(pm.request.body.raw);",
+									"const sig = CryptoJS.HmacSHA256(JSON.stringify(body.data), pm.collectionVariables.get('koraSecretKey')).toString();",
+									"pm.request.headers.upsert({key: 'x-korapay-signature', value: sig});"
+								]
+							}
+						}
+					]
 				},
 				{
 					"name": "ABS: transaction settled (simulated)",

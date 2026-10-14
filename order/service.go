@@ -11,14 +11,14 @@ import (
 
 	"Bills-Backend/abs"
 	"Bills-Backend/email"
-	"Bills-Backend/monnify"
+	"Bills-Backend/payment"
 )
 
 const invoiceLifetime = 30 * time.Minute
 
 type Service struct {
 	Store  *Store
-	Pay    *monnify.Client
+	Pay    payment.Provider
 	Vendor *abs.Client
 	Log    *slog.Logger
 	// Mailer sends the purchase-successful email. Nil disables it (no email
@@ -32,7 +32,7 @@ type Service struct {
 }
 
 // customerName is the name given for the customer, or the part of their email
-// before the @ when none was given (Monnify insists on a name).
+// before the @ when none was given (the payment provider insists on a name).
 func customerName(given, email string) string {
 	if name := strings.TrimSpace(given); name != "" {
 		return name
@@ -40,7 +40,7 @@ func customerName(given, email string) string {
 	return strings.SplitN(email, "@", 2)[0]
 }
 
-// Create starts a purchase: it records the order and asks Monnify for a
+// Create starts a purchase: it records the order and asks the payment provider for a
 // one-time account the customer pays into. Sending the same idempotency key
 // again returns the same order.
 func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
@@ -69,7 +69,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 		return o, nil // already has its invoice (or moved on)
 	}
 
-	invoice, err := s.Pay.CreateInvoice(ctx, monnify.InvoiceRequest{
+	invoice, err := s.Pay.CreateCharge(ctx, payment.ChargeRequest{
 		Reference:     o.ID,
 		AmountKobo:    o.AmountKobo,
 		CustomerName:  o.CustomerName,
@@ -78,14 +78,14 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 		ExpiresAt:     o.ExpiresAt,
 	})
 	if err != nil {
-		// A previous attempt may have created the invoice before we lost the reply.
-		existing, lookupErr := s.Pay.GetInvoice(ctx, o.ID)
+		// A previous attempt may have created the charge before we lost the reply.
+		existing, lookupErr := s.Pay.ExistingCharge(ctx, o.ID)
 		if lookupErr != nil {
 			return Order{}, fmt.Errorf("create invoice: %w", err)
 		}
 		invoice = existing
 	}
-	o.InvoiceRef, o.TxnRef = invoice.Reference, invoice.TxnReference
+	o.InvoiceRef, o.TxnRef = invoice.Reference, invoice.TxnRef
 	o.AccountNo, o.AccountName, o.BankName, o.CheckoutURL = invoice.AccountNo, invoice.AccountName, invoice.BankName, invoice.CheckoutURL
 	if !invoice.ExpiresAt.IsZero() {
 		o.ExpiresAt = invoice.ExpiresAt
@@ -96,13 +96,13 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 	return o, nil
 }
 
-// ConfirmPayment is called when Monnify says a payment came in, or when we
-// check on an order ourselves. paymentRef is our own order id (Monnify's
-// paymentReference) and txnRef is Monnify's transactionReference; either can
-// be empty, and the order is found by whichever is given.
+// ConfirmPayment is called when the provider says a payment came in, or when we
+// check on an order ourselves. paymentRef is our own order id and txnRef is the
+// provider's reference for the charge; either can be empty, and the order is
+// found by whichever is given.
 //
-// It does not trust the webhook: it asks Monnify for the transaction and
-// checks it is PAID for exactly the amount due. It returns the order (now
+// It does not trust the webhook: it asks the provider what happened and checks
+// the payment is settled for exactly the amount due. It returns the order (now
 // PAID) if this call is the one that should vend it, or nil if there is
 // nothing to do (unknown order, already handled, or not really paid).
 //
@@ -127,17 +127,17 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 		return nil, nil // no invoice yet, so nothing can have been paid
 	}
 
-	txn, err := s.Pay.GetTransaction(ctx, txnRef)
+	txn, err := s.Pay.Verify(ctx, o.ID, txnRef)
 	if err != nil {
 		return nil, err // let the webhook be retried
 	}
-	if txn.Status != "PAID" || txn.AmountPaidKobo != o.AmountKobo {
+	if txn.Status != payment.Paid || txn.ReceivedKobo != o.AmountKobo {
 		// Not paid, or paid the wrong amount. Nothing is vended. A wrong amount is
 		// recorded as what it is, PARTIALLY_PAID or OVERPAID, and the order is
 		// never expired afterwards, since the customer did pay something.
-		if txn.Status != "PENDING" {
-			s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: transaction is %s, paid %d kobo, expected %d kobo",
-				o.ID, txn.Status, txn.AmountPaidKobo, o.AmountKobo))
+		if txn.Status != payment.Pending {
+			s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: payment is %s, received %d kobo, expected %d kobo",
+				o.ID, txn.Detail, txn.ReceivedKobo, o.AmountKobo))
 		}
 		if to, ok := wrongAmountStatus(txn, o.AmountKobo); ok && o.Status != StatusExpired && o.Status != to {
 			if _, err := s.Store.Move(ctx, o.ID, o.Status, to); err != nil {
@@ -150,7 +150,7 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 		if _, err := s.Store.Move(ctx, o.ID, StatusExpired, StatusRefundDue); err != nil {
 			return nil, err
 		}
-		s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: %d kobo arrived after it expired, refund needed", o.ID, txn.AmountPaidKobo))
+		s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: %d kobo arrived after it expired, refund needed", o.ID, txn.ReceivedKobo))
 		return nil, nil
 	}
 	moved, err := s.Store.Move(ctx, o.ID, o.Status, StatusPaid)
@@ -162,13 +162,13 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 }
 
 // wrongAmountStatus says which status a payment of the wrong amount puts an
-// order in. ok is false when Monnify reports something else (pending, failed,
-// reversed), which is not money we are holding.
-func wrongAmountStatus(txn monnify.Transaction, due int64) (status Status, ok bool) {
+// order in. ok is false when the provider reports something else (pending,
+// failed, reversed), which is not money we are holding.
+func wrongAmountStatus(txn payment.Payment, due int64) (status Status, ok bool) {
 	switch {
-	case txn.Status == "PARTIALLY_PAID", txn.Status == "PAID" && txn.AmountPaidKobo < due:
+	case txn.Status == payment.Partial, txn.Status == payment.Paid && txn.ReceivedKobo < due:
 		return StatusPartiallyPaid, true
-	case txn.Status == "OVERPAID", txn.Status == "PAID" && txn.AmountPaidKobo > due:
+	case txn.Status == payment.Over, txn.Status == payment.Paid && txn.ReceivedKobo > due:
 		return StatusOverpaid, true
 	}
 	return "", false
