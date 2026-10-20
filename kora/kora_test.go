@@ -184,3 +184,22 @@ func TestVerifyReadsTheFeeKoraTook(t *testing.T) {
 		t.Errorf("an unpaid charge has no fee: %+v", got)
 	}
 }
+
+func TestBalance(t *testing.T) {
+	c, req := serverReplying(t, 200, `{"status":true,"data":{"NGN":{"available_balance":"2500.50","pending_balance":100},"USD":{"available_balance":9,"pending_balance":0}}}`)
+	got, err := c.Balance(context.Background())
+	if err != nil || got.AvailableKobo != 2500_50 || got.PendingKobo != 100_00 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	if req.URL.Path != "/api/v1/balances" || req.Header.Get("Authorization") != "Bearer sk_test_abc" {
+		t.Errorf("%s %q", req.URL.Path, req.Header.Get("Authorization"))
+	}
+	c, _ = serverReplying(t, 200, `{"status":true,"data":{"USD":{"available_balance":9}}}`)
+	if _, err := c.Balance(context.Background()); err == nil {
+		t.Error("a reply with no naira balance must be an error")
+	}
+	c, _ = serverReplying(t, 404, `{"status":false,"message":"not found"}`)
+	if _, err := c.Balance(context.Background()); err == nil {
+		t.Error("an unknown path must surface as an error, not a zero balance")
+	}
+}

@@ -69,3 +69,9 @@ type Provider interface {
 	// one it knows.
 	Verify(ctx context.Context, reference, txnRef string) (Payment, error)
 }
+
+// Balance is how much a provider is holding for us.
+type Balance struct {
+	AvailableKobo int64
+	PendingKobo   int64
+}

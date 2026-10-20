@@ -1132,6 +1132,52 @@
 						},
 						"description": "Every webhook exactly as received, newest first. Optional provider (monnify or abs) and limit (1-200, default 20). Needs the admin token."
 					}
+				},
+				{
+					"name": "Stats (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/stats?from=2026-10-01&to=2026-10-31",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"stats"
+							],
+							"query": [
+								{
+									"key": "from",
+									"value": "2026-10-01"
+								},
+								{
+									"key": "to",
+									"value": "2026-10-31"
+								}
+							]
+						},
+						"description": "The business at a glance for a window of Nigerian days (inclusive; without from and to it is the last 30 days). Money is in kobo. orders: counts by status and the failure rate. money: revenue, service fees, vendor cost, payment fees, profit, margin, average order, the payment fees paid on orders that were never delivered, and net profit. Profit counts only delivered orders whose cost was kept (orders_without_cost says how many older ones are left out). at_risk: money held in REFUND_DUE, PENDING, VENDING and wrong-amount orders. Also by_kind, by_network, top_plans and a daily series that includes empty days. Needs the admin token."
+					}
+				},
+				{
+					"name": "Balances (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/balances",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"balances"
+							]
+						},
+						"description": "What ABS and the payment provider are holding, in kobo. ABS comes from the account profile (only the wallet is read). The Kora balance call has not been tried against Kora yet; if it fails the error is shown and the ABS balance still appears. Needs the admin token."
+					}
 				}
 			],
 			"description": "The real purchase flow: create an order, pay into the account it returns, then poll the order."

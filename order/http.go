@@ -16,6 +16,7 @@ import (
 	"Bills-Backend/abs"
 	"Bills-Backend/kora"
 	"Bills-Backend/monnify"
+	"Bills-Backend/payment"
 	"Bills-Backend/reply"
 )
 
@@ -60,13 +61,92 @@ func (a *API) Routes() http.Handler {
 //
 //	GET /admin/orders?status=PENDING,REFUND_DUE&limit=50
 //	GET /admin/webhooks?provider=monnify&limit=20    (raw bodies as received)
+//	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
+//	GET /admin/balances                              (what ABS and the payment provider are holding)
 //
 // Newest first. status is optional and may list several; limit defaults to 50 (max 200).
 func (a *API) AdminRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /admin/orders", a.listOrders)
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
+	mux.HandleFunc("GET /admin/stats", a.stats)
+	mux.HandleFunc("GET /admin/balances", a.balances)
 	return mux
+}
+
+// stats is the business at a glance, for the dashboard: counts, revenue, costs,
+// profit, money at risk and a daily series. GET /admin/stats?from=2026-10-01&to=2026-10-20
+// (Nigerian days, inclusive); without them it is the last 30 days.
+func (a *API) stats(w http.ResponseWriter, r *http.Request) {
+	today := time.Now().In(lagos)
+	from, to := today.AddDate(0, 0, -29), today
+	parse := func(name string, into *time.Time) bool {
+		raw := r.URL.Query().Get(name)
+		if raw == "" {
+			return true
+		}
+		day, err := time.ParseInLocation(dateLayout, raw, lagos)
+		if err != nil {
+			reply.Fail(w, http.StatusBadRequest, name+" must be a day like 2026-10-20")
+			return false
+		}
+		*into = day
+		return true
+	}
+	if !parse("from", &from) || !parse("to", &to) {
+		return
+	}
+	if to.Before(from) {
+		reply.Fail(w, http.StatusBadRequest, "to must not be before from")
+		return
+	}
+	if to.Sub(from) > 366*24*time.Hour {
+		reply.Fail(w, http.StatusBadRequest, "ask for at most a year at a time")
+		return
+	}
+	st, err := a.Store.Stats(r.Context(), from, to)
+	if err != nil {
+		a.Log.Error("Stats - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	reply.OK(w, http.StatusOK, st)
+}
+
+// A balancer is a payment provider that can say how much it is holding.
+type balancer interface {
+	Balance(ctx context.Context) (payment.Balance, error)
+}
+
+// balances shows what each account is holding. A provider that fails to answer
+// shows its error and does not hide the others.
+func (a *API) balances(w http.ResponseWriter, r *http.Request) {
+	type account struct {
+		AvailableKobo *int64 `json:"available_kobo"`
+		PendingKobo   *int64 `json:"pending_kobo,omitempty"`
+		Error         string `json:"error,omitempty"`
+	}
+	out := map[string]account{}
+
+	if kobo, err := a.Vendor.Balance(r.Context()); err != nil {
+		a.Log.Warn("Balances - API", "detail", err.Error())
+		out["abs"] = account{Error: err.Error()}
+	} else {
+		out["abs"] = account{AvailableKobo: &kobo}
+	}
+
+	name := "payments"
+	if b, ok := a.Pay.(balancer); ok {
+		if bal, err := b.Balance(r.Context()); err != nil {
+			a.Log.Warn("Balances - API", "detail", "payments: "+err.Error())
+			out[name] = account{Error: err.Error()}
+		} else {
+			out[name] = account{AvailableKobo: &bal.AvailableKobo, PendingKobo: &bal.PendingKobo}
+		}
+	} else {
+		out[name] = account{Error: "this payment provider cannot report a balance here"}
+	}
+	reply.OK(w, http.StatusOK, out)
 }
 
 // listWebhooks shows the webhooks exactly as received, newest first.

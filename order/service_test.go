@@ -44,6 +44,7 @@ type fakes struct {
 	absStatus    atomic.Int32 // HTTP status ABS answers spend calls with
 	absBody      atomic.Value
 	meterOK      atomic.Bool
+	profileDown  atomic.Bool // makes ABS's profile (balance) call fail
 
 	emailsSent atomic.Int32
 	emailOK    atomic.Bool // whether the fake ZeptoMail server accepts the message
@@ -129,6 +130,13 @@ func newFakes(t *testing.T) *fakes {
 		switch r.URL.Path {
 		case "/api/user/system/get_system_data.php":
 			w.Write([]byte(catalogReply))
+		case "/api/user/profile/get_user_detail.php":
+			if f.profileDown.Load() {
+				w.WriteHeader(500)
+				return
+			}
+			w.Write([]byte(`{"status":true,"text":"Data found","data":{"email":"owner@example.com","apikey":"************************",
+				"user_wallets":[{"currencytag":"NGNT55","name":"NGN","walletbal":"726.00","walletpendbal":"0.00"}],"cashbackbal":"4274.00"}}`))
 		case "/api/user/transaction/validate_meter.php":
 			f.meterCalls.Add(1)
 			if f.meterOK.Load() {

@@ -52,6 +52,8 @@ func newKoraFake(t *testing.T, f *fakes) *koraFake {
 				"reference":%q,"payment_reference":%q,"status":"processing",
 				"bank_account":{"account_name":"Mi MDev","account_number":"7590031627","bank_name":"wema","bank_code":"035","expiry_date_in_utc":"2030-01-02T13:00:00.000Z"}}}`,
 				amount, amount+float64(k.expectedAdjust.Load())/100, in["reference"], in["reference"])
+		case r.Method == "GET" && r.URL.Path == "/api/v1/balances":
+			fmt.Fprint(w, `{"status":true,"message":"ok","data":{"NGN":{"available_balance":"2500.50","pending_balance":100},"USD":{"available_balance":0,"pending_balance":0}}}`)
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/charges/"):
 			ref := strings.TrimPrefix(r.URL.Path, "/api/v1/charges/")
 			fmt.Fprintf(w, `{"status":true,"message":"Charge retrieved successfully","data":{"reference":%q,"status":%q,"amount":1,"amount_paid":%.2f,"amount_accepted":%.2f,"fee":%.2f,"currency":"NGN"}}`,

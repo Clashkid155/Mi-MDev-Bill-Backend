@@ -98,6 +98,9 @@ func (c *Client) logCall(method, path string, status int, reply []byte, err erro
 	switch {
 	case err != nil:
 		c.Log.Error(tag, "detail", fmt.Sprintf("no answer after %s: %v", took, err))
+	case status >= 400 && strings.SplitN(path, "?", 2)[0] == pathUserDetail:
+		// The profile reply holds personal details; never quote it, even on an error.
+		c.Log.Warn(tag, "detail", fmt.Sprintf("HTTP %d · %s · reply not quoted", status, took))
 	case status >= 400:
 		c.Log.Warn(tag, "detail", fmt.Sprintf("HTTP %d · %s · %s", status, took, shorten(reply)))
 	default:

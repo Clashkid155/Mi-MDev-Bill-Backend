@@ -8,6 +8,7 @@ const (
 	pathBuyVoucher    = "/api/user/transaction/buy_airtime_voucher.php"
 	pathValidateMeter = "/api/user/transaction/validate_meter.php"
 	pathSystemData    = "/api/user/system/get_system_data.php"
+	pathUserDetail    = "/api/user/profile/get_user_detail.php"
 
 	// ABS's docs group this under the Partner API, not Direct, but it takes the
 	// same Direct API key; the only way to look an order up afterwards.
@@ -22,6 +23,7 @@ var operationNames = map[string]string{
 	pathBuyVoucher:    "BuyVoucher",
 	pathValidateMeter: "ValidateMeter",
 	pathSystemData:    "GetSystemData",
+	pathUserDetail:    "GetBalance",
 	pathTransaction:   "CheckTransaction",
 }
 
