@@ -105,15 +105,22 @@ func (a *API) listWebhooks(w http.ResponseWriter, r *http.Request) {
 }
 
 type adminOrderView struct {
-	ID            string    `json:"id"`
-	Status        Status    `json:"status"`
-	Kind          string    `json:"kind"`
-	Network       string    `json:"network,omitempty"`
-	NetworkName   string    `json:"network_name,omitempty"`
-	PlanID        string    `json:"plan_id,omitempty"`
-	PlanName      string    `json:"plan_name,omitempty"`
-	Recipient     string    `json:"recipient"`
-	AmountKobo    int64     `json:"amount_kobo"`
+	ID          string `json:"id"`
+	Status      Status `json:"status"`
+	Kind        string `json:"kind"`
+	Network     string `json:"network,omitempty"`
+	NetworkName string `json:"network_name,omitempty"`
+	PlanID      string `json:"plan_id,omitempty"`
+	PlanName    string `json:"plan_name,omitempty"`
+	Recipient   string `json:"recipient"`
+	AmountKobo  int64  `json:"amount_kobo"`
+	FeeKobo     int64  `json:"fee_kobo"`
+	TotalKobo   int64  `json:"total_kobo"`
+	CostKobo    int64  `json:"cost_kobo"`
+	PaymentFee  int64  `json:"payment_fee_kobo"`
+	// ProfitKobo is what the order earned: only known for a SUCCESS order whose
+	// cost was kept (orders made before costs were stored show null).
+	ProfitKobo    *int64    `json:"profit_kobo"`
 	CustomerEmail string    `json:"customer_email"`
 	TxnReference  string    `json:"transaction_reference,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -149,20 +156,34 @@ func (a *API) listOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]adminOrderView, 0, len(orders))
 	for _, o := range orders {
-		views = append(views, adminOrderView{o.ID, o.Status, o.Kind, o.Network, o.NetworkName, o.PlanID, o.PlanName, o.Recipient,
-			o.AmountKobo, o.CustomerEmail, o.TxnRef, o.CreatedAt, o.UpdatedAt})
+		views = append(views, adminOrderView{ID: o.ID, Status: o.Status, Kind: o.Kind, Network: o.Network, NetworkName: o.NetworkName,
+			PlanID: o.PlanID, PlanName: o.PlanName, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
+			TotalKobo: o.Due(), CostKobo: o.CostKobo, PaymentFee: o.PaymentFeeKobo, ProfitKobo: o.Profit(),
+			CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt})
 	}
 	reply.OK(w, http.StatusOK, map[string]any{"count": len(views), "orders": views})
 }
 
+// feeRule is the electricity service fee: the greater of MinKobo and Percent
+// of the amount, rounded up to whole naira.
+type feeRule struct {
+	MinKobo int64   `json:"min_kobo"`
+	Percent float64 `json:"percent"`
+}
+
 type orderView struct {
-	ID         string       `json:"id"`
-	Status     Status       `json:"status"`
-	Kind       string       `json:"kind"`
-	Network    string       `json:"network,omitempty"`
-	PlanID     string       `json:"plan_id,omitempty"`
-	Recipient  string       `json:"recipient,omitempty"`
+	ID        string `json:"id"`
+	Status    Status `json:"status"`
+	Kind      string `json:"kind"`
+	Network   string `json:"network,omitempty"`
+	PlanID    string `json:"plan_id,omitempty"`
+	Recipient string `json:"recipient,omitempty"`
+	// AmountKobo is the value bought; FeeKobo a service fee on top of it
+	// (electricity); TotalKobo what the customer pays, which is what the account
+	// number below is waiting for.
 	AmountKobo int64        `json:"amount_kobo"`
+	FeeKobo    int64        `json:"fee_kobo"`
+	TotalKobo  int64        `json:"total_kobo"`
 	Payment    *paymentView `json:"payment,omitempty"`
 	// Delivery holds what ABS handed back for an electricity token, once the
 	// order has succeeded. It is the thing the customer paid for.
@@ -179,7 +200,7 @@ type paymentView struct {
 
 func viewOf(o Order) orderView {
 	v := orderView{ID: o.ID, Status: o.Status, Kind: o.Kind, Network: o.Network, PlanID: o.PlanID,
-		Recipient: o.Recipient, AmountKobo: o.AmountKobo, Delivery: deliveryOf(o)}
+		Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo, TotalKobo: o.Due(), Delivery: deliveryOf(o)}
 	// An expired order's account number is dead; do not offer it for payment.
 	if o.AccountNo != "" && o.Status != StatusExpired {
 		v.Payment = &paymentView{o.AccountNo, o.AccountName, o.BankName, o.CheckoutURL, o.ExpiresAt}
@@ -296,13 +317,19 @@ func (a *API) validateMeter(w http.ResponseWriter, r *http.Request) {
 
 // catalog is what the app shows: only purchasable things, only needed fields.
 func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
-	catalog, err := a.Vendor.Catalog(r.Context())
+	catalog, err := a.SellCatalog(r.Context())
 	if err != nil {
 		a.Log.Error("Catalog - API", "detail", err.Error())
 		reply.Fail(w, http.StatusBadGateway, "catalog unavailable")
 		return
 	}
-	reply.OK(w, http.StatusOK, withinMinimumPayment(catalog, a.MinPaymentKobo))
+	reply.OK(w, http.StatusOK, struct {
+		abs.Catalog
+		// ElectricityFee tells the app how the service fee on electricity is worked
+		// out, so it can show the total before the customer orders. The order
+		// itself carries the exact fee.
+		ElectricityFee feeRule `json:"electricity_fee"`
+	}{catalog, feeRule{MinKobo: a.Pricing.ElectricityFeeMinKobo, Percent: a.Pricing.ElectricityFeePercent}})
 }
 
 func (a *API) monnifyWebhook(w http.ResponseWriter, r *http.Request) {

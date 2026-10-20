@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/mail"
 	"regexp"
 	"strings"
@@ -108,6 +109,9 @@ type product struct {
 	PlanID     string
 	Recipient  string
 	AmountKobo int64
+	// CostKobo is what ABS charges us; FeeKobo the service fee added for the customer.
+	CostKobo int64
+	FeeKobo  int64
 	// Display names as the catalog has them right now. They are stored on the
 	// order as a snapshot, so a receipt still says what was bought after ABS
 	// renames or removes it.
@@ -118,7 +122,7 @@ type product struct {
 // resolve checks the request against ABS's live catalog and works out what is
 // being bought and what it costs.
 func (s *Service) resolve(ctx context.Context, r CreateRequest) (product, error) {
-	catalog, err := s.Vendor.Catalog(ctx)
+	catalog, err := s.SellCatalog(ctx)
 	if err != nil {
 		return product{}, fmt.Errorf("catalog: %w", err)
 	}
@@ -128,7 +132,9 @@ func (s *Service) resolve(ctx context.Context, r CreateRequest) (product, error)
 	case KindData:
 		return resolveData(catalog, r, s.MinPaymentKobo)
 	default:
-		return resolveElectricity(catalog, r, s.MinPaymentKobo)
+		p, err := resolveElectricity(catalog, r, s.MinPaymentKobo)
+		p.FeeKobo = s.Pricing.ElectricityFee(p.AmountKobo)
+		return p, err
 	}
 }
 
@@ -144,7 +150,12 @@ func resolveAirtime(catalog abs.Catalog, r CreateRequest, minPayment int64) (pro
 	if minimum := max(minAirtimeKobo, minPayment); r.AmountKobo < minimum || r.AmountKobo%kobo != 0 {
 		return product{}, InvalidError{fmt.Sprintf("amount must be at least ₦%d, in whole naira", minimum/kobo)}
 	}
-	return product{Network: r.Network, Recipient: phone, AmountKobo: r.AmountKobo, NetworkName: network.Name}, nil
+	// Airtime is sold at face value; ABS charges a little less (CostPercent per 100).
+	cost := int64(math.Round(float64(r.AmountKobo) * network.CostPercent / 100))
+	if network.CostPercent <= 0 {
+		cost = r.AmountKobo
+	}
+	return product{Network: r.Network, Recipient: phone, AmountKobo: r.AmountKobo, CostKobo: cost, NetworkName: network.Name}, nil
 }
 
 func resolveData(catalog abs.Catalog, r CreateRequest, minPayment int64) (product, error) {
@@ -166,7 +177,11 @@ func resolveData(catalog abs.Catalog, r CreateRequest, minPayment int64) (produc
 	if plan.PriceKobo < minPayment {
 		return product{}, InvalidError{"this plan costs less than the minimum payment and cannot be bought"}
 	}
-	return product{Network: network.ID, PlanID: plan.ID, Recipient: recipient, AmountKobo: plan.PriceKobo,
+	cost := plan.CostKobo
+	if cost == 0 {
+		cost = plan.PriceKobo
+	}
+	return product{Network: network.ID, PlanID: plan.ID, Recipient: recipient, AmountKobo: plan.PriceKobo, CostKobo: cost,
 		NetworkName: network.Name, PlanName: plan.Name}, nil
 }
 
@@ -186,7 +201,8 @@ func resolveElectricity(catalog abs.Catalog, r CreateRequest, minPayment int64) 
 	if minimum := max(minElectricityKobo, minPayment); r.AmountKobo < minimum || r.AmountKobo%kobo != 0 {
 		return product{}, InvalidError{fmt.Sprintf("amount must be at least ₦%d, in whole naira", minimum/kobo)}
 	}
-	return product{Network: r.ServiceID, Recipient: meter, AmountKobo: r.AmountKobo, NetworkName: service.Name}, nil
+	// ABS gives no discount on electricity: the cost is the amount.
+	return product{Network: r.ServiceID, Recipient: meter, AmountKobo: r.AmountKobo, CostKobo: r.AmountKobo, NetworkName: service.Name}, nil
 }
 
 // ValidateMeter asks ABS who a meter belongs to (free, nothing is charged), for

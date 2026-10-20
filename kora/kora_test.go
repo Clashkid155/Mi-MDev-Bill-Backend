@@ -172,3 +172,15 @@ func TestExistingChargeCannotBeRecovered(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestVerifyReadsTheFeeKoraTook(t *testing.T) {
+	c, _ := serverReplying(t, 200, `{"status":true,"data":{"status":"success","amount":"10000.00","amount_paid":"10000.00","amount_accepted":"10000.00","fee":161.25}}`)
+	got, err := c.Verify(context.Background(), "MDEV_1", "")
+	if err != nil || got.FeeKobo != 16125 || got.ReceivedKobo != 1_000_000 {
+		t.Fatalf("got %+v, %v", got, err)
+	}
+	c, _ = serverReplying(t, 200, `{"status":true,"data":{"status":"processing","fee":0}}`)
+	if got, _ := c.Verify(context.Background(), "MDEV_1", ""); got.FeeKobo != 0 {
+		t.Errorf("an unpaid charge has no fee: %+v", got)
+	}
+}

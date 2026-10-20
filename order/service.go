@@ -29,6 +29,24 @@ type Service struct {
 	// plans priced below it are refused and hidden from the catalog. 0 means no
 	// minimum beyond ABS's own.
 	MinPaymentKobo int64
+	// Pricing marks up what ABS charges, hides some plans and sets the
+	// electricity service fee. The zero value changes nothing.
+	Pricing Pricing
+	// FeeWarnPercent: log a warning when the payment provider's fee on a payment
+	// is more than this percent of it (the fee we planned prices around is about
+	// 1.6%). 0 turns the watch off.
+	FeeWarnPercent float64
+}
+
+// SellCatalog is the catalog the customer is shown and orders from: ABS's own,
+// with the pricing rules applied and anything below the payment provider's
+// minimum left out. Prices always come from here, never from the app.
+func (s *Service) SellCatalog(ctx context.Context) (abs.Catalog, error) {
+	catalog, err := s.Vendor.Catalog(ctx)
+	if err != nil {
+		return abs.Catalog{}, err
+	}
+	return withinMinimumPayment(s.Pricing.Apply(catalog), s.MinPaymentKobo), nil
 }
 
 // customerName is the name given for the customer, or the part of their email
@@ -55,7 +73,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 		}
 		o = Order{
 			IdempotencyKey: r.IdempotencyKey, Kind: r.Kind, Network: p.Network, PlanID: p.PlanID,
-			Recipient: p.Recipient, AmountKobo: p.AmountKobo,
+			Recipient: p.Recipient, AmountKobo: p.AmountKobo, CostKobo: p.CostKobo, FeeKobo: p.FeeKobo, TotalKobo: p.AmountKobo + p.FeeKobo,
 			CustomerEmail: r.Email, CustomerName: customerName(r.CustomerName, r.Email),
 			NetworkName: p.NetworkName, PlanName: p.PlanName,
 			ExpiresAt: time.Now().Add(invoiceLifetime),
@@ -71,7 +89,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 
 	invoice, err := s.Pay.CreateCharge(ctx, payment.ChargeRequest{
 		Reference:     o.ID,
-		AmountKobo:    o.AmountKobo,
+		AmountKobo:    o.Due(),
 		CustomerName:  o.CustomerName,
 		CustomerEmail: o.CustomerEmail,
 		Description:   "Mi MDev " + o.Kind,
@@ -131,15 +149,15 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 	if err != nil {
 		return nil, err // let the webhook be retried
 	}
-	if txn.Status != payment.Paid || txn.ReceivedKobo != o.AmountKobo {
+	if txn.Status != payment.Paid || txn.ReceivedKobo != o.Due() {
 		// Not paid, or paid the wrong amount. Nothing is vended. A wrong amount is
 		// recorded as what it is, PARTIALLY_PAID or OVERPAID, and the order is
 		// never expired afterwards, since the customer did pay something.
 		if txn.Status != payment.Pending {
 			s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: payment is %s, received %d kobo, expected %d kobo",
-				o.ID, txn.Detail, txn.ReceivedKobo, o.AmountKobo))
+				o.ID, txn.Detail, txn.ReceivedKobo, o.Due()))
 		}
-		if to, ok := wrongAmountStatus(txn, o.AmountKobo); ok && o.Status != StatusExpired && o.Status != to {
+		if to, ok := wrongAmountStatus(txn, o.Due()); ok && o.Status != StatusExpired && o.Status != to {
 			if _, err := s.Store.Move(ctx, o.ID, o.Status, to); err != nil {
 				return nil, err
 			}
@@ -158,7 +176,30 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 		return nil, err
 	}
 	o.Status = StatusPaid
+	s.recordPaymentFee(ctx, o, txn)
 	return &o, nil
+}
+
+// recordPaymentFee keeps what the payment provider took (for profit figures)
+// and warns when it is more than planned for: prices are worked out for a fee
+// of about 1.6% and a provider that quietly raises it turns sales into losses.
+// It never fails the payment.
+func (s *Service) recordPaymentFee(ctx context.Context, o Order, txn payment.Payment) {
+	if txn.FeeKobo <= 0 {
+		return
+	}
+	if err := s.Store.SetPaymentFee(ctx, o.ID, txn.FeeKobo); err != nil {
+		s.Log.Warn("PaymentFee - Order", "detail", fmt.Sprintf("order %s: could not save the payment fee: %v", o.ID, err))
+	}
+	// Compared in whole numbers: 170 of 10,000 is exactly 1.7%, not 1.7000000000000002.
+	if limit := percentMilli(s.FeeWarnPercent); limit > 0 && txn.ReceivedKobo > 0 {
+		if txn.FeeKobo*100_000 > txn.ReceivedKobo*limit {
+			percent := float64(txn.FeeKobo) / float64(txn.ReceivedKobo) * 100
+			s.Log.Warn("PaymentFee - Order", "detail", fmt.Sprintf(
+				"order %s: the payment provider took %.2f%% (%d kobo of %d), above the %.2f%% prices were worked out for; check the fee agreement",
+				o.ID, percent, txn.FeeKobo, txn.ReceivedKobo, s.FeeWarnPercent))
+		}
+	}
 }
 
 // wrongAmountStatus says which status a payment of the wrong amount puts an

@@ -86,6 +86,8 @@ func serve(cfg Config, log *slog.Logger) {
 			Log:            log,
 			Mailer:         mailer,
 			MinPaymentKobo: cfg.MinPaymentKobo,
+			Pricing:        cfg.Pricing(),
+			FeeWarnPercent: cfg.PaymentFeeWarnPercent,
 		},
 		MonnifySecret:          cfg.MonnifySecretKey,
 		VerifyMonnifySignature: cfg.IsProduction(),

@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"Bills-Backend/order"
 )
 
 type Config struct {
@@ -45,6 +47,19 @@ type Config struct {
 	// MinPaymentKobo is the smallest payment the payment provider accepts. It is
 	// ₦100 with Kora and 0 (none) with Monnify; MIN_PAYMENT_NAIRA can raise it.
 	MinPaymentKobo int64
+
+	// Pricing. What ABS charges is marked up by a percentage per network before
+	// the customer sees it. Each markup has to be at least 2%, or plans would sell
+	// at a loss after the payment provider's fee of about 1.6%. Percentages are
+	// percent over the ABS price.
+	MarkupMTN, MarkupMTNLarge    float64 // MTN plans below and from MarkupLargeFromNaira
+	MarkupLargeFromNaira         int64
+	MarkupAirtel, MarkupGlo      float64
+	Markup9mobile, MarkupDefault float64 // MarkupDefault covers any network not named above
+	HiddenPlans                  []string
+	ElectricityFeePercent        float64
+	ElectricityFeeMinNaira       int64
+	PaymentFeeWarnPercent        float64
 
 	// AdminToken protects /admin and, when they are mounted, the direct /abs,
 	// /monnify and /email endpoints. It is required whenever real money can be
@@ -107,6 +122,43 @@ func LoadConfig() (Config, error) {
 		}
 		c.MinPaymentKobo = max(c.MinPaymentKobo, naira*100)
 	}
+	var err error
+	for _, p := range []struct {
+		key      string
+		fallback float64
+		into     *float64
+	}{
+		{"MARKUP_MTN_PERCENT", 2.5, &c.MarkupMTN},
+		{"MARKUP_MTN_LARGE_PERCENT", 2.2, &c.MarkupMTNLarge},
+		{"MARKUP_AIRTEL_PERCENT", 4, &c.MarkupAirtel},
+		{"MARKUP_GLO_PERCENT", 5, &c.MarkupGlo},
+		{"MARKUP_9MOBILE_PERCENT", 5, &c.Markup9mobile},
+		{"MARKUP_DEFAULT_PERCENT", 4, &c.MarkupDefault},
+		{"ELECTRICITY_FEE_PERCENT", 1.8, &c.ElectricityFeePercent},
+		{"PAYMENT_FEE_WARN_PERCENT", 1.7, &c.PaymentFeeWarnPercent},
+	} {
+		if *p.into, err = envFloat(p.key, p.fallback); err != nil {
+			return c, err
+		}
+	}
+	largeFrom, err := envFloat("MARKUP_LARGE_FROM_NAIRA", 20000)
+	if err != nil {
+		return c, err
+	}
+	c.MarkupLargeFromNaira = int64(largeFrom)
+	minFee, err := envFloat("ELECTRICITY_FEE_MIN_NAIRA", 50)
+	if err != nil {
+		return c, err
+	}
+	c.ElectricityFeeMinNaira = int64(minFee)
+	hidden, set := os.LookupEnv("HIDDEN_PLANS")
+	if !set {
+		hidden = defaultHiddenPlans
+	}
+	c.HiddenPlans = splitList(hidden)
+	if err := c.Pricing().Validate(); err != nil {
+		return c, err
+	}
 	if c.Env != "sandbox" && c.Env != "production" {
 		return c, fmt.Errorf("APP_ENV must be sandbox or production, got %q", c.Env)
 	}
@@ -138,6 +190,53 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("ZEPTOMAIL_TOKEN and MAIL_FROM_EMAIL must be set together")
 	}
 	return c, nil
+}
+
+// defaultHiddenPlans are ABS plans that are not offered, each for a reason that
+// could hurt a customer or us (see DESIGN.md): MTN 12.5GB 2-week (ABS charges more
+// than the official price), the two Airtel "no credit simcard" deals, the two MTN
+// "[postpaid]" plans, and the MTN 15GB deal (dearer than the regular plan).
+// HIDDEN_PLANS replaces this list; an empty value hides nothing.
+const defaultHiddenPlans = "5GGUX,PPVK8,P77ZY,PKTS6,PD5ZP,2PV3Y"
+
+// Pricing is the pricing rules in the order package's terms.
+func (c Config) Pricing() order.Pricing {
+	hidden := map[string]bool{}
+	for _, id := range c.HiddenPlans {
+		hidden[id] = true
+	}
+	return order.Pricing{
+		Markups:               map[string]float64{"mtn": c.MarkupMTN, "airtel": c.MarkupAirtel, "glo": c.MarkupGlo, "9mobile": c.Markup9mobile},
+		DefaultMarkup:         c.MarkupDefault,
+		LargeFromKobo:         c.MarkupLargeFromNaira * 100,
+		LargeMarkups:          map[string]float64{"mtn": c.MarkupMTNLarge},
+		Hidden:                hidden,
+		ElectricityFeePercent: c.ElectricityFeePercent,
+		ElectricityFeeMinKobo: c.ElectricityFeeMinNaira * 100,
+	}
+}
+
+func splitList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// envFloat reads a number from the environment, or the fallback when unset.
+func envFloat(key string, fallback float64) (float64, error) {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback, nil
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("%s must be a number, 0 or more, got %q", key, raw)
+	}
+	return v, nil
 }
 
 func boolCount(bs ...bool) int {

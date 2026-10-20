@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	_ "embed"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -23,7 +22,15 @@ type Order struct {
 	Network        string
 	PlanID         string
 	Recipient      string
-	AmountKobo     int64
+	AmountKobo     int64 // the value bought: what the vendor is asked to deliver
+	// CostKobo is what the vendor charges us for it, FeeKobo the service fee the
+	// customer pays on top (electricity only) and TotalKobo what the customer
+	// pays in all. PaymentFeeKobo is what the payment provider took, known once
+	// paid. Orders made before these were kept have them all as 0; see Due.
+	CostKobo       int64
+	FeeKobo        int64
+	TotalKobo      int64
+	PaymentFeeKobo int64
 	CustomerEmail  string
 	CustomerName   string
 	NetworkName    string // snapshot of the catalog's display name at purchase; ABS renames things
@@ -39,6 +46,27 @@ type Order struct {
 	VendResponse   string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// Due is what the customer has to pay: the total, or for an order made before
+// totals were kept, the amount.
+func (o Order) Due() int64 {
+	if o.TotalKobo > 0 {
+		return o.TotalKobo
+	}
+	return o.AmountKobo
+}
+
+// Profit is what a SUCCESS order earned: what the customer paid, less what the
+// vendor charged and what the payment provider took. It is nil for any other
+// status, and for an order made before costs were kept (its cost is 0), because
+// a profit worked out without a cost would be invented.
+func (o Order) Profit() *int64 {
+	if o.Status != StatusSuccess || o.CostKobo <= 0 {
+		return nil
+	}
+	p := o.Due() - o.CostKobo - o.PaymentFeeKobo
+	return &p
 }
 
 var ErrNotFound = errors.New("order: not found")
@@ -58,6 +86,12 @@ func OpenStore(path string) (*Store, error) {
 	// Databases created before these columns existed need them added.
 	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name"} {
 		if err := addColumnIfMissing(db, "orders", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo"} {
+		if err := addColumnIfMissing(db, "orders", column, "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			db.Close()
 			return nil, err
 		}
@@ -90,17 +124,35 @@ func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// newID is our own order id, and doubles as the invoiceReference /
-// paymentReference we give Monnify, so it appears verbatim in their dashboard
-// and webhooks. "MDEV_" marks it as ours, the way Monnify's own generated
-// transactionReference is marked "MNFY|...".
+// idAlphabet is Crockford's base32: digits and capitals without I, L, O and U,
+// so an id read out over the phone or copied by hand cannot be mistaken.
+const idAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// newID is our own order id, and doubles as the reference we give the payment
+// provider, so it appears verbatim in their dashboard and webhooks. "MDEV_"
+// marks it as ours, the way Monnify's own generated transactionReference is
+// marked "MNFY|...". The rest is 16 characters, each picked from 32 symbols by
+// 5 random bits (80 bits in all), so ids are short enough to read and type yet
+// impossible to guess, which matters because anyone holding an id can poll its
+// order. Orders made before this change keep their older ids; nothing depends
+// on an id's length.
+//
+// Uniqueness does not rest on luck: the id is the table's primary key, so a
+// repeat can never be stored, and Insert draws a fresh id if one ever clashes.
 func newID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	return "MDEV_" + hex.EncodeToString(b)
+	var b [16]byte
+	rand.Read(b[:])
+	out := make([]byte, len(b))
+	for i, v := range b {
+		out[i] = idAlphabet[v&31] // 256 is a multiple of 32, so every symbol is equally likely
+	}
+	return "MDEV_" + string(out)
 }
 
-const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, customer_email, customer_name, network_name, plan_name, status,
+// idGen makes order ids; tests replace it to force a clash.
+var idGen = newID
+
+const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, customer_email, customer_name, network_name, plan_name, status,
 	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response,
 	created_at, updated_at`
 
@@ -108,7 +160,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var o Order
 	var status string
 	var expires, created, updated int64
-	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CustomerEmail,
+	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CostKobo, &o.FeeKobo, &o.TotalKobo, &o.PaymentFeeKobo, &o.CustomerEmail,
 		&o.CustomerName, &o.NetworkName, &o.PlanName, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
 		&expires, &o.VendResponse, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -184,13 +236,35 @@ func (s *Store) AwaitingPastExpiry(ctx context.Context, now time.Time, limit int
 // Insert stores a new INITIATED order and fills in its ID and timestamps.
 func (s *Store) Insert(ctx context.Context, o *Order) error {
 	now := time.Now()
-	o.ID, o.Status, o.CreatedAt, o.UpdatedAt = newID(), StatusInitiated, now, now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO orders
-		(id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, customer_email, customer_name, network_name, plan_name, status, expires_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		o.ID, o.IdempotencyKey, o.Kind, o.Network, o.PlanID, o.Recipient, o.AmountKobo, o.CustomerEmail, o.CustomerName, o.NetworkName, o.PlanName, o.Status,
-		o.ExpiresAt.Unix(), now.Unix(), now.Unix())
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		o.ID, o.Status, o.CreatedAt, o.UpdatedAt = idGen(), StatusInitiated, now, now
+		_, err = s.db.ExecContext(ctx, `INSERT INTO orders
+		(id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, customer_email, customer_name, network_name, plan_name, status, expires_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			o.ID, o.IdempotencyKey, o.Kind, o.Network, o.PlanID, o.Recipient, o.AmountKobo, o.CostKobo, o.FeeKobo, o.TotalKobo, o.CustomerEmail, o.CustomerName, o.NetworkName, o.PlanName, o.Status,
+			o.ExpiresAt.Unix(), now.Unix(), now.Unix())
+		// Only a clash on the id itself is worth another try; a repeated
+		// idempotency key is the caller's to handle.
+		if err == nil || !idClash(err) {
+			return err
+		}
+	}
 	return err
+}
+
+// SetPaymentFee records what the payment provider took for an order.
+func (s *Store) SetPaymentFee(ctx context.Context, id string, kobo int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE orders SET payment_fee_kobo = ?, updated_at = ? WHERE id = ?`, kobo, time.Now().Unix(), id)
+	return err
+}
+
+// idClash reports whether err is SQLite refusing a repeated order id. The
+// message names the column ("UNIQUE constraint failed: orders.id"), and
+// orders.idempotency_key must not be mistaken for it.
+func idClash(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "UNIQUE constraint failed: orders.id") && !strings.Contains(msg, "orders.idempotency_key")
 }
 
 // AttachInvoice records the Monnify invoice and moves INITIATED -> AWAITING_PAYMENT.

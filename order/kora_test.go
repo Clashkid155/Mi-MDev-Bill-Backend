@@ -26,6 +26,7 @@ type koraFake struct {
 	status         atomic.Value // Kora's status word for the charge
 	acceptedKobo   atomic.Int64
 	expectedAdjust atomic.Int64 // added to amount_expected, to simulate Kora asking for more
+	feeKobo        atomic.Int64 // the fee the query reply reports
 	created        atomic.Int32
 
 	mu      sync.Mutex
@@ -53,8 +54,8 @@ func newKoraFake(t *testing.T, f *fakes) *koraFake {
 				amount, amount+float64(k.expectedAdjust.Load())/100, in["reference"], in["reference"])
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/charges/"):
 			ref := strings.TrimPrefix(r.URL.Path, "/api/v1/charges/")
-			fmt.Fprintf(w, `{"status":true,"message":"Charge retrieved successfully","data":{"reference":%q,"status":%q,"amount":1,"amount_paid":%.2f,"amount_accepted":%.2f,"currency":"NGN"}}`,
-				ref, k.status.Load().(string), float64(k.acceptedKobo.Load())/100, float64(k.acceptedKobo.Load())/100)
+			fmt.Fprintf(w, `{"status":true,"message":"Charge retrieved successfully","data":{"reference":%q,"status":%q,"amount":1,"amount_paid":%.2f,"amount_accepted":%.2f,"fee":%.2f,"currency":"NGN"}}`,
+				ref, k.status.Load().(string), float64(k.acceptedKobo.Load())/100, float64(k.acceptedKobo.Load())/100, float64(k.feeKobo.Load())/100)
 		default:
 			w.WriteHeader(404)
 		}

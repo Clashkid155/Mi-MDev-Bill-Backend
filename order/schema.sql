@@ -5,7 +5,11 @@ CREATE TABLE IF NOT EXISTS orders (
     network         TEXT NOT NULL,             -- ABS network / disco id
     plan_id         TEXT NOT NULL DEFAULT '',   -- data plan id
     recipient       TEXT NOT NULL,             -- phone, FibreX FN or meter number
-    amount_kobo     INTEGER NOT NULL CHECK (amount_kobo > 0),
+    amount_kobo     INTEGER NOT NULL CHECK (amount_kobo > 0),  -- the value bought
+    cost_kobo       INTEGER NOT NULL DEFAULT 0, -- what the vendor charges us for it (0 on orders from before this was kept)
+    fee_kobo        INTEGER NOT NULL DEFAULT 0, -- service fee charged to the customer on top (electricity)
+    total_kobo      INTEGER NOT NULL DEFAULT 0, -- what the customer pays: amount + fee (0 on old orders: they paid the amount)
+    payment_fee_kobo INTEGER NOT NULL DEFAULT 0, -- what the payment provider took, known once paid
     customer_email  TEXT NOT NULL,
     customer_name   TEXT NOT NULL DEFAULT '', -- given, or the email's local part; set once at creation
     network_name    TEXT NOT NULL DEFAULT '', -- display name of the network/DISCO as it was at purchase (a snapshot)

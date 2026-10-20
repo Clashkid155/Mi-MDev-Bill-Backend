@@ -36,6 +36,50 @@
 		{
 			"key": "koraSecretKey",
 			"value": ""
+		},
+		{
+			"key": "monnifyBaseUrl",
+			"value": "https://sandbox.monnify.com"
+		},
+		{
+			"key": "monnifyApiKey",
+			"value": ""
+		},
+		{
+			"key": "monnifySecretKey",
+			"value": ""
+		},
+		{
+			"key": "monnifyToken",
+			"value": ""
+		},
+		{
+			"key": "categoryCode",
+			"value": "ELECTRICITY"
+		},
+		{
+			"key": "billerCode",
+			"value": ""
+		},
+		{
+			"key": "productCode",
+			"value": ""
+		},
+		{
+			"key": "customerId",
+			"value": ""
+		},
+		{
+			"key": "billAmount",
+			"value": "100"
+		},
+		{
+			"key": "validationReference",
+			"value": ""
+		},
+		{
+			"key": "billsReference",
+			"value": ""
 		}
 	],
 	"item": [
@@ -468,6 +512,321 @@
 			]
 		},
 		{
+			"name": "Monnify Bills (direct to Monnify)",
+			"description": "Walks Monnify Bills Payment step by step, calling Monnify itself rather than this backend, to learn how the API behaves before anything is built. Run 1 to 4 to browse, 5 to validate, 6 to vend, 7 to requery.",
+			"item": [
+				{
+					"name": "1. Login",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/auth/login",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"auth",
+								"login"
+							]
+						},
+						"description": "Calls Monnify directly (not this backend). Fill monnifyApiKey and monnifySecretKey in the collection variables; monnifyBaseUrl defaults to the sandbox. Saves the access token for the other requests. Never commit or share a collection with real keys filled in.",
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "username",
+									"value": "{{monnifyApiKey}}",
+									"type": "string"
+								},
+								{
+									"key": "password",
+									"value": "{{monnifySecretKey}}",
+									"type": "string"
+								}
+							]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const t = (pm.response.json().responseBody || {}).accessToken;",
+									"if (t) pm.collectionVariables.set('monnifyToken', t);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "2. Biller categories",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{monnifyToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/vas/bills-payment/biller-categories?size=50",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"vas",
+								"bills-payment",
+								"biller-categories"
+							],
+							"query": [
+								{
+									"key": "size",
+									"value": "50"
+								}
+							]
+						},
+						"description": "Read only. AIRTIME, DATA_BUNDLE, DATA, ELECTRICITY, CABLE_TV, BETTING, EDUCATION and TRANSPORTATION were returned for the first account tested."
+					}
+				},
+				{
+					"name": "3. Billers in a category",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{monnifyToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/vas/bills-payment/billers?category_code={{categoryCode}}&size=50",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"vas",
+								"bills-payment",
+								"billers"
+							],
+							"query": [
+								{
+									"key": "category_code",
+									"value": "{{categoryCode}}"
+								},
+								{
+									"key": "size",
+									"value": "50"
+								}
+							]
+						},
+						"description": "Read only. Set categoryCode first (for example ELECTRICITY, AIRTIME, DATA_BUNDLE or DATA). Saves the first biller code as billerCode; change it to pick another."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const b = (pm.response.json().responseBody || {}); const list = b.content || [];",
+									"if (list.length) pm.collectionVariables.set('billerCode', list[0].code);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "4. Products of a biller",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{monnifyToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/vas/bills-payment/biller-products?biller_code={{billerCode}}&size=50",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"vas",
+								"bills-payment",
+								"biller-products"
+							],
+							"query": [
+								{
+									"key": "biller_code",
+									"value": "{{billerCode}}"
+								},
+								{
+									"key": "size",
+									"value": "50"
+								}
+							]
+						},
+						"description": "Read only. This is where a product's price, any fee and any commission would show; look at every field of the reply. Saves the first product as productCode (field name is read as code, or productCode)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const b = (pm.response.json().responseBody || {}); const list = b.content || [];",
+									"if (list.length) pm.collectionVariables.set('productCode', list[0].code || list[0].productCode);"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "5. Validate customer",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{monnifyToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/vas/bills-payment/validate-customer",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"vas",
+								"bills-payment",
+								"validate-customer"
+							]
+						},
+						"description": "Read only. Checks a meter, phone or smart card number. If vendInstruction.requireValidationRef is true the vend needs the validationReference, which this request saves.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"productCode\": \"{{productCode}}\",\n  \"customerId\": \"{{customerId}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const b = (pm.response.json().responseBody || {});",
+									"const v = (b.vendInstruction || {}).validationReference || b.validationReference;",
+									"pm.collectionVariables.set('validationReference', v || '');"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "6. Vend (spends wallet money)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{monnifyToken}}"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/vas/bills-payment/vend",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"vas",
+								"bills-payment",
+								"vend"
+							]
+						},
+						"description": "SANDBOX ONLY unless you mean it: on a live account this debits your Monnify wallet. A fresh unique reference is generated for each send and saved as billsReference. validationReference is sent only if the validate step produced one. Set billAmount and customerId first.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"productCode\": \"{{productCode}}\",\n  \"customerId\": \"{{customerId}}\",\n  \"amount\": {{billAmount}},\n  \"reference\": \"{{billsReference}}\",\n  \"validationReference\": \"{{validationReference}}\",\n  \"emailAddress\": \"test@example.com\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"pm.collectionVariables.set('billsReference', 'MDEVTEST_' + Date.now());"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "7. Requery a vend",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{monnifyToken}}"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/vas/bills-payment/requery?reference={{billsReference}}",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"vas",
+								"bills-payment",
+								"requery"
+							],
+							"query": [
+								{
+									"key": "reference",
+									"value": "{{billsReference}}"
+								}
+							]
+						},
+						"description": "Read only. Status is IN_PROGRESS, SUCCESS or FAILED. Run it after Vend, or any time the vend reply was unclear."
+					}
+				}
+			]
+		},
+		{
 			"name": "Orders (app API)",
 			"item": [
 				{
@@ -499,7 +858,7 @@
 								}
 							}
 						},
-						"description": "Amounts here are in kobo. Send the same idempotency_key twice to see the same order come back.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+						"description": "Amounts here are in kobo. Send the same idempotency_key twice to see the same order come back.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured).\n\nThe reply has amount_kobo (what is bought), fee_kobo (the electricity service fee, 0 otherwise) and total_kobo (what the customer pays, and what the account number waits for)."
 					},
 					"event": [
 						{
@@ -543,7 +902,7 @@
 								}
 							}
 						},
-						"description": "The price comes from the catalog, so no amount is sent. plan_id is a data plan id from GET /v1/catalog.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+						"description": "The price comes from the catalog, so no amount is sent. plan_id is a data plan id from GET /v1/catalog.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured).\n\nThe reply has amount_kobo (what is bought), fee_kobo (the electricity service fee, 0 otherwise) and total_kobo (what the customer pays, and what the account number waits for)."
 					},
 					"event": [
 						{
@@ -587,7 +946,7 @@
 								}
 							}
 						},
-						"description": "FibreX plans (recipient_type \"fn\", category \"FibreX\" in the catalog) are bought for a FibreX FN: two letters FN and 6 digits. ABS's \"ODU\" plans look similar in the catalog but are bought for an ordinary phone number (recipient_type \"phone\"); use the same Create order (data) request for those.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+						"description": "FibreX plans (recipient_type \"fn\", category \"FibreX\" in the catalog) are bought for a FibreX FN: two letters FN and 6 digits. ABS's \"ODU\" plans look similar in the catalog but are bought for an ordinary phone number (recipient_type \"phone\"); use the same Create order (data) request for those.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured).\n\nThe reply has amount_kobo (what is bought), fee_kobo (the electricity service fee, 0 otherwise) and total_kobo (what the customer pays, and what the account number waits for)."
 					},
 					"event": [
 						{
@@ -631,7 +990,7 @@
 								}
 							}
 						},
-						"description": "Call \"Validate meter\" first and show the owner to the customer; the backend does not check the meter itself at order time. Minimum 1000 naira (100000 kobo). The token appears as `delivery` on the order once it succeeds.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured)."
+						"description": "Call \"Validate meter\" first and show the owner to the customer; the backend does not check the meter itself at order time. Minimum 1000 naira (100000 kobo). The token appears as `delivery` on the order once it succeeds.\n\n`customer_name` is optional and defaults to the email's local part; it is stored on the order and used both for the Monnify invoice and for the purchase-successful receipt email (if ZeptoMail is configured).\n\nThe reply has amount_kobo (what is bought), fee_kobo (the electricity service fee, 0 otherwise) and total_kobo (what the customer pays, and what the account number waits for)."
 					},
 					"event": [
 						{
@@ -696,7 +1055,7 @@
 								"{{orderId}}"
 							]
 						},
-						"description": "Uses the id saved by Create order (ids look like MDEV_ followed by 32 hex characters).\n\nWhile the order is AWAITING_PAYMENT or PARTIALLY_PAID, each call (at most once every 5 seconds per order) also asks Monnify whether it was paid, so the order moves on even if the webhook never arrives. When an order reaches SUCCESS and ZeptoMail is configured, the customer is emailed a receipt (to test it: pay the order in Monnify's bank simulator and set MAIL_SANDBOX=false, using your own email on the order)."
+						"description": "Uses the id saved by Create order (ids look like MDEV_ followed by 16 letters and digits, for example MDEV_7K3QX9M2PA4B8WDH; orders made before 19 Oct 2026 have 32 hex characters).\n\nWhile the order is AWAITING_PAYMENT or PARTIALLY_PAID, each call (at most once every 5 seconds per order) also asks Monnify whether it was paid, so the order moves on even if the webhook never arrives. When an order reaches SUCCESS and ZeptoMail is configured, the customer is emailed a receipt (to test it: pay the order in Monnify's bank simulator and set MAIL_SANDBOX=false, using your own email on the order)."
 					}
 				},
 				{
@@ -713,7 +1072,8 @@
 								"v1",
 								"catalog"
 							]
-						}
+						},
+						"description": "Prices here are what customers pay: ABS's price marked up per network (MTN 2.5%, 2.2% from \u20a620,000; Airtel 4%; Glo 5%), rounded up to \u20a65. Plans ABS runs as promotions (names with HOT DEAL, CHEAP OFFER or BEST DEAL) are in their own \"Deals\" category, first in each network. A few plans are hidden on purpose. The reply also has electricity_fee {min_kobo, percent}: the service fee on electricity is the greater of the two, rounded up to whole naira, so the app can show the total before ordering. The vendor cost is never in this reply."
 					}
 				},
 				{

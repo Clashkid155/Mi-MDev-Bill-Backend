@@ -48,6 +48,9 @@ type Payment struct {
 	ReceivedKobo int64
 	// Detail is the provider's own status text, for logs.
 	Detail string
+	// FeeKobo is what the provider charged for the payment, when it says (0 if it
+	// does not).
+	FeeKobo int64
 }
 
 // ErrNotRecoverable means the provider cannot hand back the account of a charge

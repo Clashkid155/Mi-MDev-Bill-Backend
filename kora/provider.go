@@ -80,11 +80,12 @@ func (c *Client) Verify(ctx context.Context, reference, _ string) (payment.Payme
 		Status         string `json:"status"`
 		AmountPaid     naira  `json:"amount_paid"`
 		AmountAccepted *naira `json:"amount_accepted"`
+		Fee            naira  `json:"fee"`
 	}
 	if err := c.do(ctx, http.MethodGet, pathCharge(reference), nil, &out); err != nil {
 		return payment.Payment{}, err
 	}
-	p := payment.Payment{Detail: out.Status}
+	p := payment.Payment{Detail: out.Status, FeeKobo: out.Fee.kobo()}
 	if out.AmountAccepted != nil {
 		p.ReceivedKobo = out.AmountAccepted.kobo()
 	} else {

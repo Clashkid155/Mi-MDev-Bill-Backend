@@ -41,6 +41,7 @@ type receipt struct {
 	RecipientLabel        string
 	Recipient             string
 	Amount                string
+	Fee, Total            string // the service fee and what was paid in all; empty when there was no fee
 	Preheader             string
 
 	// Electricity only. Token and Units come from ABS's reply; RawDelivery is
@@ -58,6 +59,9 @@ func buildReceipt(o Order, delivery json.RawMessage, now time.Time) receipt {
 		Name: o.CustomerName, Reference: o.ID, Date: now.Format("2 Jan 2006, 3:04 PM MST"),
 		Network: o.NetworkName, Plan: o.PlanName, Recipient: o.Recipient, Amount: formatNaira(o.AmountKobo),
 		SupportURL: supportURL, XHandle: xHandle, XURL: xURL, Year: now.Year(),
+	}
+	if o.FeeKobo > 0 {
+		r.Fee, r.Total = formatNaira(o.FeeKobo), formatNaira(o.Due())
 	}
 	switch o.Kind {
 	case KindElectricity:
@@ -92,6 +96,9 @@ func (r receipt) text() string {
 	}
 	if r.Plan != "" {
 		fmt.Fprintf(&b, "Plan: %s\n", r.Plan)
+	}
+	if r.Fee != "" {
+		fmt.Fprintf(&b, "Service fee: %s\nTotal paid: %s\n", r.Fee, r.Total)
 	}
 	fmt.Fprintf(&b, "%s: %s\nDate: %s\nReference: %s\n", r.RecipientLabel, r.Recipient, r.Date, r.Reference)
 	switch {

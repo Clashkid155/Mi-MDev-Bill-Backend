@@ -66,11 +66,11 @@ func TestParseCatalog(t *testing.T) {
 	for _, cat := range mtn.Categories {
 		names = append(names, cat.Name)
 	}
-	if strings.Join(names, ",") != "Weekly,Monthly,FibreX,ODU" {
+	if strings.Join(names, ",") != "Deals,Weekly,FibreX,ODU" {
 		t.Fatalf("categories not grouped in display order, FibreX and ODU separated: %v", names)
 	}
-	monthly := mtn.Categories[1].Plans[0]
-	if monthly.ID != "3JZJO" || monthly.PriceKobo != 30000 || *monthly.ValidityDays != 30 || monthly.RecipientType != "phone" {
+	monthly := mtn.Categories[0].Plans[0] // a "HOT DEAL" plan lands in Deals
+	if monthly.ID != "3JZJO" || monthly.PriceKobo != 30000 || monthly.CostKobo != 30000 || *monthly.ValidityDays != 30 || monthly.RecipientType != "phone" {
 		t.Errorf("plan: %+v", monthly)
 	}
 	if fibre := mtn.Categories[2].Plans[0]; fibre.ID != "1Q8VZ" || fibre.RecipientType != "fn" {
@@ -279,9 +279,9 @@ func TestDataCategoryAgainstRealCatalog(t *testing.T) {
 	if got := categoryOf("MTN56TFD", "BBNJ7"); got != "ODU" {
 		t.Errorf("BBNJ7: got %q, want ODU", got)
 	}
-	// An ordinary monthly bundle must not be swept into ODU by mistake.
-	if got := categoryOf("MTN56TFD", "20GBHOT"); got != "Monthly" {
-		t.Errorf("20GBHOT: got %q, want Monthly", got)
+	// A promotional plan ("HOT DEAL" in its name) goes to Deals, not Monthly.
+	if got := categoryOf("MTN56TFD", "20GBHOT"); got != "Deals" {
+		t.Errorf("20GBHOT: got %q, want Deals", got)
 	}
 	// Airtel: its "Unlimited N Mbps" plans use validity_type "FibreX / ODU" but
 	// recipient_type "phone" (bought like ordinary data, not with an FN) — ODU.
@@ -343,5 +343,61 @@ func TestElectricityServicesThatChargeAFeeAreLeftOut(t *testing.T) {
 		if !c.kept && len(cat.Electricity) != 0 {
 			t.Errorf("%s: a region with nothing left to offer must be dropped: %+v", c.name, cat.Electricity)
 		}
+	}
+}
+
+func TestDealsAreTheirOwnCategoryAndComeFirst(t *testing.T) {
+	cases := map[string]string{
+		"20GB HOT DEAL 🔥 20 - 30 DAYS validity": "Deals",
+		"750MB - 1 Day - CHEAP OFFER 🔥":         "Deals",
+		"10GB - 7 Days - BEST DEAL 🔥":           "Deals",
+		"4GB- 7 day validity Hot deal 🔥":        "Deals",
+		"1GB Weekly Plan Get 1GB":               "Weekly",
+		"Dealer pack 5GB":                       "Weekly", // only the whole words count
+	}
+	for name, want := range cases {
+		if got := dataCategory(name, "Weekly", "", "phone"); got != want {
+			t.Errorf("%q: got %q, want %q", name, got, want)
+		}
+	}
+	// An ODU plan keeps its category even if ABS calls it a deal.
+	if got := dataCategory("50Mbps ODU HOT DEAL", "Monthly", "50MBPS ODU", "phone"); got != "ODU" {
+		t.Errorf("an ODU deal should stay ODU, got %q", got)
+	}
+	plans := []categorizedPlan{
+		{"Weekly", DataPlan{ID: "w", PriceKobo: 1}}, {"Deals", DataPlan{ID: "d", PriceKobo: 1}}, {"Daily", DataPlan{ID: "x", PriceKobo: 1}},
+	}
+	got := groupPlans(plans)
+	if got[0].Name != "Deals" || got[1].Name != "Daily" || got[2].Name != "Weekly" {
+		t.Errorf("Deals should come first: %v", got)
+	}
+}
+
+func TestCostIsKeptForProfit(t *testing.T) {
+	raw := `{"airtimeproviders":[
+	  {"name":"MTN Airtime","product_trackid":"A1","allowed_numbers":"0803","sellatwhatpercentoff":"99.00"},
+	  {"name":"Glo Airtime","product_trackid":"A2","allowed_numbers":"0805","sellatwhatpercentoff":"98"},
+	  {"name":"No price","product_trackid":"A3","allowed_numbers":"0802"},
+	  {"name":"Absurd","product_trackid":"A4","allowed_numbers":"0802","sellatwhatpercentoff":"9.00"}],
+	 "data_providers":[{"name":"MTN Data","product_trackid":"D1","allowed_numbers":"0803","bouquetdata":[
+	  {"trackid":"P1","name":"1GB","sellatwhatpercentoff":"490.00","recipient_type":"phone","validity_type":"Daily","validity_days":1}]}]}`
+	c, err := parseCatalog(json.RawMessage(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]float64{"A1": 99, "A2": 98, "A3": 100, "A4": 100} // unreadable or absurd means no discount
+	for _, n := range c.Airtime {
+		if n.CostPercent != want[n.ID] {
+			t.Errorf("%s: cost percent %v, want %v", n.ID, n.CostPercent, want[n.ID])
+		}
+	}
+	_, plan, _ := c.FindDataPlan("P1")
+	if plan.CostKobo != 49000 || plan.PriceKobo != 49000 {
+		t.Errorf("plan cost %d price %d, both should start at 49000", plan.CostKobo, plan.PriceKobo)
+	}
+	// Cost must never reach the app.
+	body, _ := json.Marshal(c)
+	if strings.Contains(string(body), "cost") {
+		t.Errorf("cost leaked into the client catalog: %s", body)
 	}
 }

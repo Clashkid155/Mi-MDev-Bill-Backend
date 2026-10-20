@@ -58,6 +58,10 @@ type AirtimeNetwork struct {
 	ID             string   `json:"id"` // sent as "network" when ordering airtime
 	Name           string   `json:"name"`
 	NumberPrefixes []string `json:"number_prefixes"` // phone prefixes that belong to this network
+
+	// CostPercent is what ABS charges us per 100 of airtime (99 means a 1%
+	// discount). Never sent to the app; it is for working out profit.
+	CostPercent float64 `json:"-"`
 }
 
 type DataNetwork struct {
@@ -85,6 +89,11 @@ type DataPlan struct {
 	RecipientType string `json:"recipient_type"`
 	PriceKobo     int64  `json:"price_kobo"`
 	Note          string `json:"note,omitempty"`
+
+	// CostKobo is what ABS charges us for the plan. PriceKobo starts out equal
+	// to it; the order package marks it up before the app sees the plan. Never
+	// sent to the app.
+	CostKobo int64 `json:"-"`
 }
 
 type ElectricityRegion struct {
@@ -145,6 +154,7 @@ func parseCatalog(raw json.RawMessage) (Catalog, error) {
 			Name           string `json:"name"`
 			ProductTrackID string `json:"product_trackid"`
 			AllowedNumbers string `json:"allowed_numbers"`
+			Price          string `json:"sellatwhatpercentoff"` // naira charged per 100 naira of airtime
 		} `json:"airtimeproviders"`
 		DataProviders []struct {
 			Name           string `json:"name"`
@@ -187,7 +197,9 @@ func parseCatalog(raw json.RawMessage) (Catalog, error) {
 	}
 
 	for _, p := range in.AirtimeProviders {
-		out.Airtime = append(out.Airtime, AirtimeNetwork{p.ProductTrackID, p.Name, splitPrefixes(p.AllowedNumbers)})
+		out.Airtime = append(out.Airtime, AirtimeNetwork{
+			ID: p.ProductTrackID, Name: p.Name, NumberPrefixes: splitPrefixes(p.AllowedNumbers), CostPercent: airtimeCostPercent(p.Price),
+		})
 	}
 
 	for _, p := range in.DataProviders {
@@ -199,7 +211,7 @@ func parseCatalog(raw json.RawMessage) (Catalog, error) {
 			}
 			plans = append(plans, categorizedPlan{dataCategory(b.Name, b.ValidityType, b.DataSize, b.RecipientType), DataPlan{
 				ID: b.TrackID, Name: b.Name, Size: b.DataSize, Validity: b.Validity, ValidityDays: b.ValidityDays,
-				RecipientType: b.RecipientType, PriceKobo: price, Note: b.Note,
+				RecipientType: b.RecipientType, PriceKobo: price, CostKobo: price, Note: b.Note,
 			}})
 			if format, known := recipientFormats[b.RecipientType]; known {
 				out.Recipients[b.RecipientType] = format
@@ -236,8 +248,13 @@ func parseCatalog(raw json.RawMessage) (Catalog, error) {
 // then router, then the two unlimited-broadband kinds. Categories ABS adds
 // later come after these.
 var categoryOrder = map[string]int{
-	"Daily": 0, "Weekly": 1, "Monthly": 2, "Yearly": 3, "Social Media": 4, "Router": 5, "FibreX": 6, "ODU": 7,
+	"Deals": 0, "Daily": 1, "Weekly": 2, "Monthly": 3, "Yearly": 4, "Social Media": 5, "Router": 6, "FibreX": 7, "ODU": 8,
 }
+
+// dealWord matches the words ABS puts in the name of its promotional plans. ABS
+// has no flag for them, so the name is all there is; a renamed deal simply
+// shows up under its normal category again.
+var dealWord = regexp.MustCompile(`(?i)\b(?:hot deal|cheap offer|best deal)\b`)
 
 // odUWord matches "ODU" as a whole word (case-insensitive), e.g. in
 // "50MBPS ODU" or "50MBPS ROUTER UNLIMITED [ODU ONLY]- 30days", without
@@ -264,10 +281,15 @@ var fibreXWord = regexp.MustCompile(`(?i)\bFi(?:br|rb)eX\b`)
 //     checked too, not just data_size.
 //
 // The name/data_size checks run first, regardless of validity_type, so none of
-// these are left buried inside the ordinary Monthly/Weekly categories.
+// these are left buried inside the ordinary Monthly/Weekly categories. Next,
+// ABS's promotional plans ("HOT DEAL", "CHEAP OFFER", "BEST DEAL" in the name)
+// are gathered into their own "Deals" category.
 func dataCategory(name, validityType, dataSize, recipientType string) string {
 	if odUWord.MatchString(dataSize) || odUWord.MatchString(name) {
 		return "ODU"
+	}
+	if dealWord.MatchString(name) {
+		return "Deals"
 	}
 	if validityType != "FibreX / ODU" {
 		return validityType
@@ -347,6 +369,17 @@ func splitPrefixes(csv string) []string {
 		}
 	}
 	return prefixes
+}
+
+// airtimeCostPercent reads what ABS charges per 100 of airtime ("99.00"). An
+// unreadable or absurd value counts as 100, no discount, so that profit is never
+// overstated.
+func airtimeCostPercent(raw string) float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || v < 50 || v > 120 {
+		return 100
+	}
+	return v
 }
 
 func nairaToKobo(naira string) (int64, bool) {

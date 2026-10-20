@@ -23,7 +23,7 @@ import (
 
 // A small ABS catalog with one of everything, in ABS's real shape.
 const catalogReply = `{"status":true,"text":"Data found","data":{
-  "airtimeproviders":[{"name":"MTN Airtime","product_trackid":"MTNAIR6TFD","allowed_numbers":"0803"}],
+  "airtimeproviders":[{"name":"MTN Airtime","product_trackid":"MTNAIR6TFD","allowed_numbers":"0803","sellatwhatpercentoff":"99.00"}],
   "data_providers":[{"name":"MTN Data","product_trackid":"MTN56TFD","allowed_numbers":"0803","bouquetdata":[
     {"trackid":"P1","name":"1GB Daily","sellatwhatpercentoff":"290.00","recipient_type":"phone","validity_type":"Daily","validity":"1 day","validity_days":1},
     {"trackid":"F1","name":"FibreX 50Mbps","sellatwhatpercentoff":"29000.00","recipient_type":"fn","validity_type":"FibreX / ODU","validity_days":30},
