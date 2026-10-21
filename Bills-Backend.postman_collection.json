@@ -1178,6 +1178,40 @@
 						},
 						"description": "What ABS and the payment provider are holding, in kobo. ABS comes from the account profile (only the wallet is read). The Kora balance call has not been tried against Kora yet; if it fails the error is shown and the ABS balance still appears. Needs the admin token."
 					}
+				},
+				{
+					"name": "Mark refunded (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/orders/{{orderId}}/refunded",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"orders",
+								"{{orderId}}",
+								"refunded"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"refund_fee_kobo\": 5000,\n  \"note\": \"refunded from the Kora dashboard\",\n  \"payment_fee_returned\": false\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Closes an order that is in REFUND_DUE after you have sent the money back by hand (this moves no money itself), so the app stops saying it is waiting for a refund. Every field is optional: refund_fee_kobo is what sending the refund cost (it reduces the net profit in /admin/stats), note is for the record, payment_fee_returned: true says the payment provider gave back its fee on the original payment. 409 for an order that is not in REFUND_DUE, 404 for an unknown one. Needs the admin token."
+					}
 				}
 			],
 			"description": "The real purchase flow: create an order, pay into the account it returns, then poll the order."

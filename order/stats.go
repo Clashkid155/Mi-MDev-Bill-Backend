@@ -45,6 +45,7 @@ type Stats struct {
 		MarginPercent         float64 `json:"margin_percent"` // profit / revenue, over orders with a known cost
 		AverageOrderKobo      int64   `json:"average_order_kobo"`
 		FeesOnUndeliveredKobo int64   `json:"payment_fees_on_undelivered_kobo"`
+		RefundFeesKobo        int64   `json:"refund_fees_kobo"` // what sending refunds cost
 		NetProfitKobo         int64   `json:"net_profit_kobo"`
 		OrdersWithoutCost     int     `json:"orders_without_cost"`
 	} `json:"money"`
@@ -153,12 +154,13 @@ func (s *Store) Stats(ctx context.Context, from, to time.Time) (Stats, error) {
 	if st.Orders.Succeeded > 0 {
 		st.Money.AverageOrderKobo = st.Money.RevenueKobo / int64(st.Orders.Succeeded)
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(payment_fee_kobo), 0) FROM orders
-		WHERE status IN `+notDeliveredSQL+` AND created_at >= ? AND created_at < ?`, lo, hi).Scan(&st.Money.FeesOnUndeliveredKobo)
+	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(payment_fee_kobo), 0), COALESCE(SUM(refund_fee_kobo), 0) FROM orders
+		WHERE status IN `+notDeliveredSQL+` AND created_at >= ? AND created_at < ?`, lo, hi).
+		Scan(&st.Money.FeesOnUndeliveredKobo, &st.Money.RefundFeesKobo)
 	if err != nil {
 		return st, err
 	}
-	st.Money.NetProfitKobo = st.Money.ProfitKobo - st.Money.FeesOnUndeliveredKobo
+	st.Money.NetProfitKobo = st.Money.ProfitKobo - st.Money.FeesOnUndeliveredKobo - st.Money.RefundFeesKobo
 
 	// Delivered orders, grouped.
 	group := func(column, label string, limit int, orderBy string) ([]Breakdown, error) {

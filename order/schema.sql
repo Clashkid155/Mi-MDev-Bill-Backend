@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS orders (
     fee_kobo        INTEGER NOT NULL DEFAULT 0, -- service fee charged to the customer on top (electricity)
     total_kobo      INTEGER NOT NULL DEFAULT 0, -- what the customer pays: amount + fee (0 on old orders: they paid the amount)
     payment_fee_kobo INTEGER NOT NULL DEFAULT 0, -- what the payment provider took, known once paid
+    refund_fee_kobo INTEGER NOT NULL DEFAULT 0, -- what sending a refund cost us, set when a REFUND_DUE order is marked refunded
+    refund_note     TEXT NOT NULL DEFAULT '',
+    refunded_at     INTEGER NOT NULL DEFAULT 0, -- unix seconds
     customer_email  TEXT NOT NULL,
     customer_name   TEXT NOT NULL DEFAULT '', -- given, or the email's local part; set once at creation
     network_name    TEXT NOT NULL DEFAULT '', -- display name of the network/DISCO as it was at purchase (a snapshot)

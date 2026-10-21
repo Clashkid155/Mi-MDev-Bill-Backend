@@ -61,6 +61,7 @@ func (a *API) Routes() http.Handler {
 //
 //	GET /admin/orders?status=PENDING,REFUND_DUE&limit=50
 //	GET /admin/webhooks?provider=monnify&limit=20    (raw bodies as received)
+//	POST /admin/orders/{id}/refunded {"refund_fee_kobo":5000,"note":"..."}  (after sending the money back by hand)
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
 //	GET /admin/balances                              (what ABS and the payment provider are holding)
 //
@@ -69,6 +70,7 @@ func (a *API) AdminRoutes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /admin/orders", a.listOrders)
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
+	mux.HandleFunc("POST /admin/orders/{id}/refunded", a.markRefunded)
 	mux.HandleFunc("GET /admin/stats", a.stats)
 	mux.HandleFunc("GET /admin/balances", a.balances)
 	return mux
@@ -198,6 +200,10 @@ type adminOrderView struct {
 	TotalKobo   int64  `json:"total_kobo"`
 	CostKobo    int64  `json:"cost_kobo"`
 	PaymentFee  int64  `json:"payment_fee_kobo"`
+	// Set once a REFUND_DUE order is marked refunded.
+	RefundFee  int64      `json:"refund_fee_kobo,omitempty"`
+	RefundNote string     `json:"refund_note,omitempty"`
+	RefundedAt *time.Time `json:"refunded_at,omitempty"`
 	// ProfitKobo is what the order earned: only known for a SUCCESS order whose
 	// cost was kept (orders made before costs were stored show null).
 	ProfitKobo    *int64    `json:"profit_kobo"`
@@ -205,6 +211,73 @@ type adminOrderView struct {
 	TxnReference  string    `json:"transaction_reference,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func refundedAt(o Order) *time.Time {
+	if o.RefundedAt.IsZero() {
+		return nil
+	}
+	return &o.RefundedAt
+}
+
+func adminViewOf(o Order) adminOrderView {
+	return adminOrderView{ID: o.ID, Status: o.Status, Kind: o.Kind, Network: o.Network, NetworkName: o.NetworkName,
+		PlanID: o.PlanID, PlanName: o.PlanName, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
+		TotalKobo: o.Due(), CostKobo: o.CostKobo, PaymentFee: o.PaymentFeeKobo, ProfitKobo: o.Profit(),
+		RefundFee: o.RefundFeeKobo, RefundNote: o.RefundNote, RefundedAt: refundedAt(o),
+		CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
+}
+
+// markRefunded closes an order in REFUND_DUE after the money was sent back by
+// hand. It does not move any money itself. The body is optional:
+//
+//	{"refund_fee_kobo": 5000, "note": "refunded from the Kora dashboard", "payment_fee_returned": false}
+//
+// refund_fee_kobo is what sending the refund cost; it goes into the net profit.
+// payment_fee_returned says the provider gave its fee on the original payment back.
+func (a *API) markRefunded(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefundFeeKobo int64  `json:"refund_fee_kobo"`
+		Note          string `json:"note"`
+		// PaymentFeeReturned: the payment provider gave back its fee on the original payment.
+		PaymentFeeReturned bool `json:"payment_fee_returned"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil {
+		reply.Fail(w, http.StatusBadRequest, "unreadable body")
+		return
+	}
+	if len(strings.TrimSpace(string(body))) > 0 && json.Unmarshal(body, &req) != nil {
+		reply.Fail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	req.Note = strings.TrimSpace(req.Note)
+	if req.RefundFeeKobo < 0 {
+		reply.Fail(w, http.StatusBadRequest, "refund_fee_kobo cannot be negative")
+		return
+	}
+	if len([]rune(req.Note)) > 500 {
+		reply.Fail(w, http.StatusBadRequest, "note must be at most 500 characters")
+		return
+	}
+	id := r.PathValue("id")
+	if current, err := a.Store.ByID(r.Context(), id); err == nil && req.RefundFeeKobo > current.Due() {
+		reply.Fail(w, http.StatusBadRequest, "refund_fee_kobo is more than the order")
+		return
+	}
+	o, err := a.Store.MarkRefunded(r.Context(), id, req.RefundFeeKobo, req.Note, req.PaymentFeeReturned)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		reply.Fail(w, http.StatusNotFound, "order not found")
+	case errors.Is(err, ErrNotRefundable):
+		reply.Fail(w, http.StatusConflict, "only an order in REFUND_DUE can be marked refunded; this one is "+string(o.Status))
+	case err != nil:
+		a.Log.Error("MarkRefunded - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+	default:
+		a.Log.Info("MarkRefunded - API", "detail", fmt.Sprintf("order %s marked refunded (the refund cost %d kobo)", o.ID, o.RefundFeeKobo))
+		reply.OK(w, http.StatusOK, adminViewOf(o))
+	}
 }
 
 func (a *API) listOrders(w http.ResponseWriter, r *http.Request) {
@@ -236,10 +309,7 @@ func (a *API) listOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]adminOrderView, 0, len(orders))
 	for _, o := range orders {
-		views = append(views, adminOrderView{ID: o.ID, Status: o.Status, Kind: o.Kind, Network: o.Network, NetworkName: o.NetworkName,
-			PlanID: o.PlanID, PlanName: o.PlanName, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
-			TotalKobo: o.Due(), CostKobo: o.CostKobo, PaymentFee: o.PaymentFeeKobo, ProfitKobo: o.Profit(),
-			CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt})
+		views = append(views, adminViewOf(o))
 	}
 	reply.OK(w, http.StatusOK, map[string]any{"count": len(views), "orders": views})
 }
