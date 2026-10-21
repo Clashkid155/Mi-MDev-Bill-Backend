@@ -38,6 +38,7 @@ type receipt struct {
 	Kind, KindLower       string
 	NetworkLabel, Network string // Network is empty for orders from before names were stored
 	Plan                  string
+	Note                  string // ABS's note on the plan, as the customer saw it
 	RecipientLabel        string
 	Recipient             string
 	Amount                string
@@ -57,7 +58,7 @@ func buildReceipt(o Order, delivery json.RawMessage, now time.Time) receipt {
 	now = now.In(lagos)
 	r := receipt{
 		Name: o.CustomerName, Reference: o.ID, Date: now.Format("2 Jan 2006, 3:04 PM MST"),
-		Network: o.NetworkName, Plan: o.PlanName, Recipient: o.Recipient, Amount: formatNaira(o.AmountKobo),
+		Network: o.NetworkName, Plan: o.PlanName, Note: o.PlanNote, Recipient: o.Recipient, Amount: formatNaira(o.AmountKobo),
 		SupportURL: supportURL, XHandle: xHandle, XURL: xURL, Year: now.Year(),
 	}
 	if o.FeeKobo > 0 {
@@ -96,6 +97,9 @@ func (r receipt) text() string {
 	}
 	if r.Plan != "" {
 		fmt.Fprintf(&b, "Plan: %s\n", r.Plan)
+	}
+	if r.Note != "" {
+		fmt.Fprintf(&b, "Note: %s\n", r.Note)
 	}
 	if r.Fee != "" {
 		fmt.Fprintf(&b, "Service fee: %s\nTotal paid: %s\n", r.Fee, r.Total)

@@ -117,6 +117,7 @@ type product struct {
 	// renames or removes it.
 	NetworkName string
 	PlanName    string
+	PlanNote    string
 }
 
 // resolve checks the request against ABS's live catalog and works out what is
@@ -182,7 +183,7 @@ func resolveData(catalog abs.Catalog, r CreateRequest, minPayment int64) (produc
 		cost = plan.PriceKobo
 	}
 	return product{Network: network.ID, PlanID: plan.ID, Recipient: recipient, AmountKobo: plan.PriceKobo, CostKobo: cost,
-		NetworkName: network.Name, PlanName: plan.Name}, nil
+		NetworkName: network.Name, PlanName: plan.Name, PlanNote: plan.Note}, nil
 }
 
 // resolveElectricity checks the request's shape only. It does not call ABS's

@@ -202,7 +202,7 @@ func TestOldDatabasesGetTheCostAndFeeColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refund_note", "refunded_at"} {
+	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refund_note", "refunded_at", "plan_note"} {
 		if _, err := store.db.Exec(`ALTER TABLE orders DROP COLUMN ` + column); err != nil {
 			t.Fatal(err)
 		}
@@ -284,5 +284,57 @@ func TestFeeWatchCanBeSwitchedOff(t *testing.T) {
 	}
 	if got, _ := f.svc.Store.ByID(ctx, o.ID); got.PaymentFeeKobo != 5_00 {
 		t.Errorf("the fee should still be recorded: %d", got.PaymentFeeKobo)
+	}
+}
+
+// The warning ABS puts on a plan is kept on the order, so the customer's receipt
+// and our records show what they were told when they paid.
+func TestThePlansNoteIsKeptOnTheOrder(t *testing.T) {
+	f := newFakes(t)
+	f.svc.Pricing = realPricing()
+	ctx := context.Background()
+
+	o, err := f.svc.Create(ctx, CreateRequest{IdempotencyKey: "n1", Kind: KindData, PlanID: "NOTED", Recipient: "08012345678", Email: "a@b.co"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const note = "wont credit if user has an outstanding debt"
+	if o.PlanNote != note {
+		t.Fatalf("note on the order: %q", o.PlanNote)
+	}
+	if v := viewOf(o); v.Note != note {
+		t.Errorf("the app is shown the note: %+v", v)
+	}
+	body, _ := json.Marshal(viewOf(o))
+	if !strings.Contains(string(body), `"note":"wont credit`) {
+		t.Errorf("order JSON: %s", body)
+	}
+	if v := adminViewOf(o); v.PlanNote != note {
+		t.Errorf("the admin sees it too: %+v", v)
+	}
+
+	final := f.payAndVend(t, o)
+	if final.PlanNote != note {
+		t.Errorf("note lost after delivery: %q", final.PlanNote)
+	}
+	f.mu.Lock()
+	mail := f.lastEmail
+	f.mu.Unlock()
+	if !strings.Contains(mail.Text, "Note: "+note) || !strings.Contains(mail.HTML, note) {
+		t.Errorf("the receipt must repeat the note:\n%s", mail.Text)
+	}
+
+	// A plan without a note has none anywhere.
+	plain, err := f.svc.Create(ctx, dataRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(viewOf(plain))
+	if plain.PlanNote != "" || strings.Contains(string(body), `"note"`) {
+		t.Errorf("no note expected: %q %s", plain.PlanNote, body)
+	}
+	page, err := buildReceipt(plain, nil, time.Now()).html()
+	if err != nil || strings.Contains(page, ">Note<") {
+		t.Errorf("a receipt for a plan without a note must have no Note row (err %v)", err)
 	}
 }

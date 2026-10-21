@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS orders (
     customer_name   TEXT NOT NULL DEFAULT '', -- given, or the email's local part; set once at creation
     network_name    TEXT NOT NULL DEFAULT '', -- display name of the network/DISCO as it was at purchase (a snapshot)
     plan_name       TEXT NOT NULL DEFAULT '', -- display name of the data plan as it was at purchase (a snapshot)
+    plan_note       TEXT NOT NULL DEFAULT '', -- ABS's note on the plan at purchase (what the customer was told)
     status          TEXT NOT NULL,
     invoice_ref     TEXT NOT NULL DEFAULT '',
     txn_ref         TEXT NOT NULL DEFAULT '',

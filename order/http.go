@@ -194,6 +194,7 @@ type adminOrderView struct {
 	NetworkName string `json:"network_name,omitempty"`
 	PlanID      string `json:"plan_id,omitempty"`
 	PlanName    string `json:"plan_name,omitempty"`
+	PlanNote    string `json:"plan_note,omitempty"`
 	Recipient   string `json:"recipient"`
 	AmountKobo  int64  `json:"amount_kobo"`
 	FeeKobo     int64  `json:"fee_kobo"`
@@ -222,7 +223,7 @@ func refundedAt(o Order) *time.Time {
 
 func adminViewOf(o Order) adminOrderView {
 	return adminOrderView{ID: o.ID, Status: o.Status, Kind: o.Kind, Network: o.Network, NetworkName: o.NetworkName,
-		PlanID: o.PlanID, PlanName: o.PlanName, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
+		PlanID: o.PlanID, PlanName: o.PlanName, PlanNote: o.PlanNote, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
 		TotalKobo: o.Due(), CostKobo: o.CostKobo, PaymentFee: o.PaymentFeeKobo, ProfitKobo: o.Profit(),
 		RefundFee: o.RefundFeeKobo, RefundNote: o.RefundNote, RefundedAt: refundedAt(o),
 		CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
@@ -328,6 +329,10 @@ type orderView struct {
 	Network   string `json:"network,omitempty"`
 	PlanID    string `json:"plan_id,omitempty"`
 	Recipient string `json:"recipient,omitempty"`
+	// Note is the plan's own warning as it was when the order was made (a fair
+	// use limit, "won't credit if the line owes airtime"). Show it before the
+	// customer pays. Absent when the plan has none.
+	Note string `json:"note,omitempty"`
 	// AmountKobo is the value bought; FeeKobo a service fee on top of it
 	// (electricity); TotalKobo what the customer pays, which is what the account
 	// number below is waiting for.
@@ -350,7 +355,7 @@ type paymentView struct {
 
 func viewOf(o Order) orderView {
 	v := orderView{ID: o.ID, Status: o.Status, Kind: o.Kind, Network: o.Network, PlanID: o.PlanID,
-		Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo, TotalKobo: o.Due(), Delivery: deliveryOf(o)}
+		Recipient: o.Recipient, Note: o.PlanNote, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo, TotalKobo: o.Due(), Delivery: deliveryOf(o)}
 	// An expired order's account number is dead; do not offer it for payment.
 	if o.AccountNo != "" && o.Status != StatusExpired {
 		v.Payment = &paymentView{o.AccountNo, o.AccountName, o.BankName, o.CheckoutURL, o.ExpiresAt}

@@ -40,17 +40,20 @@ type Order struct {
 	CustomerName  string
 	NetworkName   string // snapshot of the catalog's display name at purchase; ABS renames things
 	PlanName      string // same, for data plans
-	Status        Status
-	InvoiceRef    string
-	TxnRef        string
-	AccountNo     string
-	AccountName   string
-	BankName      string
-	CheckoutURL   string
-	ExpiresAt     time.Time
-	VendResponse  string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// PlanNote is ABS's note on the plan as it was at purchase (a fair use limit,
+	// "won't credit if the line owes airtime"): what the customer was told.
+	PlanNote     string
+	Status       Status
+	InvoiceRef   string
+	TxnRef       string
+	AccountNo    string
+	AccountName  string
+	BankName     string
+	CheckoutURL  string
+	ExpiresAt    time.Time
+	VendResponse string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Due is what the customer has to pay: the total, or for an order made before
@@ -89,7 +92,7 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	// Databases created before these columns existed need them added.
-	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name"} {
+	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name", "plan_note"} {
 		if err := addColumnIfMissing(db, "orders", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			db.Close()
 			return nil, err
@@ -161,7 +164,7 @@ func newID() string {
 // idGen makes order ids; tests replace it to force a clash.
 var idGen = newID
 
-const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, refund_fee_kobo, refund_note, refunded_at, customer_email, customer_name, network_name, plan_name, status,
+const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, refund_fee_kobo, refund_note, refunded_at, customer_email, customer_name, network_name, plan_name, plan_note, status,
 	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response,
 	created_at, updated_at`
 
@@ -170,7 +173,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var status string
 	var expires, created, updated, refunded int64
 	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CostKobo, &o.FeeKobo, &o.TotalKobo, &o.PaymentFeeKobo, &o.RefundFeeKobo, &o.RefundNote, &refunded, &o.CustomerEmail,
-		&o.CustomerName, &o.NetworkName, &o.PlanName, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
+		&o.CustomerName, &o.NetworkName, &o.PlanName, &o.PlanNote, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
 		&expires, &o.VendResponse, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, ErrNotFound
@@ -252,9 +255,9 @@ func (s *Store) Insert(ctx context.Context, o *Order) error {
 	for attempt := 0; attempt < 5; attempt++ {
 		o.ID, o.Status, o.CreatedAt, o.UpdatedAt = idGen(), StatusInitiated, now, now
 		_, err = s.db.ExecContext(ctx, `INSERT INTO orders
-		(id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, customer_email, customer_name, network_name, plan_name, status, expires_at, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			o.ID, o.IdempotencyKey, o.Kind, o.Network, o.PlanID, o.Recipient, o.AmountKobo, o.CostKobo, o.FeeKobo, o.TotalKobo, o.CustomerEmail, o.CustomerName, o.NetworkName, o.PlanName, o.Status,
+		(id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, customer_email, customer_name, network_name, plan_name, plan_note, status, expires_at, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			o.ID, o.IdempotencyKey, o.Kind, o.Network, o.PlanID, o.Recipient, o.AmountKobo, o.CostKobo, o.FeeKobo, o.TotalKobo, o.CustomerEmail, o.CustomerName, o.NetworkName, o.PlanName, o.PlanNote, o.Status,
 			o.ExpiresAt.Unix(), now.Unix(), now.Unix())
 		// Only a clash on the id itself is worth another try; a repeated
 		// idempotency key is the caller's to handle.

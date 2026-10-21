@@ -28,6 +28,7 @@ const catalogReply = `{"status":true,"text":"Data found","data":{
     {"trackid":"P1","name":"1GB Daily","sellatwhatpercentoff":"290.00","recipient_type":"phone","validity_type":"Daily","validity":"1 day","validity_days":1},
     {"trackid":"F1","name":"FibreX 50Mbps","sellatwhatpercentoff":"29000.00","recipient_type":"fn","validity_type":"FibreX / ODU","validity_days":30},
     {"trackid":"CHEAP","name":"40MB","sellatwhatpercentoff":"48.00","recipient_type":"phone","validity_type":"Daily","validity_days":1},
+    {"trackid":"NOTED","name":"600MB 2 Days Hot Deal","sellatwhatpercentoff":"250.00","note":"wont credit if user has an outstanding debt","recipient_type":"phone","validity_type":"Daily","validity_days":2},
     {"trackid":"FREE","name":"Unpriced","sellatwhatpercentoff":"0.00","recipient_type":"phone","validity_type":"Daily"}
   ]}],
   "electricity_providers":[{"name":"Oyo","trackid":"R1","servicedata":[{"trackid":"ELEC1","name":"IBEDC (prepaid)"}]}]

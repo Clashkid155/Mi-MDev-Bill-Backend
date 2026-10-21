@@ -75,7 +75,7 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 			IdempotencyKey: r.IdempotencyKey, Kind: r.Kind, Network: p.Network, PlanID: p.PlanID,
 			Recipient: p.Recipient, AmountKobo: p.AmountKobo, CostKobo: p.CostKobo, FeeKobo: p.FeeKobo, TotalKobo: p.AmountKobo + p.FeeKobo,
 			CustomerEmail: r.Email, CustomerName: customerName(r.CustomerName, r.Email),
-			NetworkName: p.NetworkName, PlanName: p.PlanName,
+			NetworkName: p.NetworkName, PlanName: p.PlanName, PlanNote: p.PlanNote,
 			ExpiresAt: time.Now().Add(invoiceLifetime),
 		}
 		err = s.Store.Insert(ctx, &o)
