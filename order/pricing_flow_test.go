@@ -202,7 +202,7 @@ func TestOldDatabasesGetTheCostAndFeeColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refund_note", "refunded_at", "plan_note"} {
+	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refund_amount_kobo", "refund_note", "refunded_at", "plan_note"} {
 		if _, err := store.db.Exec(`ALTER TABLE orders DROP COLUMN ` + column); err != nil {
 			t.Fatal(err)
 		}

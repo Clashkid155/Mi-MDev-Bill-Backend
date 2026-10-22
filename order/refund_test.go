@@ -131,7 +131,7 @@ func TestRefundCostsReduceTheNetProfit(t *testing.T) {
 		PaymentFeeKobo: 161_25}, StatusRefundDue, day(2026, 10, 11, 12, 0))
 	var id string
 	store.db.QueryRow(`SELECT id FROM orders WHERE status = 'REFUND_DUE' AND created_at = ?`, day(2026, 10, 11, 12, 0).Unix()).Scan(&id)
-	if _, err := store.MarkRefunded(context.Background(), id, 50_00, "", false); err != nil {
+	if _, err := store.MarkRefunded(context.Background(), id, 50_00, 0, "", false); err != nil {
 		t.Fatal(err)
 	}
 	st, err := store.Stats(context.Background(), day(2026, 10, 10, 0, 0), day(2026, 10, 12, 0, 0))
@@ -144,5 +144,84 @@ func TestRefundCostsReduceTheNetProfit(t *testing.T) {
 	}
 	if m.NetProfitKobo != m.ProfitKobo-2*161_25-50_00 {
 		t.Errorf("net profit %d", m.NetProfitKobo)
+	}
+}
+
+// Sending back less than the customer paid (the costs of the transaction deducted)
+// is recorded, shown to the customer, and counted as money kept.
+func TestRefundWithTheTransactionCostsDeducted(t *testing.T) {
+	f := newFakes(t)
+	srv := httptest.NewServer((&API{Service: f.svc}).AdminRoutes())
+	defer srv.Close()
+	ctx := context.Background()
+
+	o := refundDue(t, f, "r5") // paid ₦10,000; the provider kept ₦161.25
+	// ₦161.25 payment fee and the ₦50 refund fee deducted: ₦9,788.75 goes back
+	code, reply := postRefunded(t, srv, o.ID, `{"refund_fee_kobo":5000,"refund_amount_kobo":978875,"note":"costs deducted"}`)
+	data, _ := reply["data"].(map[string]any)
+	if code != 200 || data["refunded_kobo"] != float64(978875) || data["status"] != "REFUNDED" {
+		t.Fatalf("%d %v", code, reply)
+	}
+	got, _ := f.svc.Store.ByID(ctx, o.ID)
+	if got.Refunded() != 978_875 || got.RefundAmountKobo != 978_875 {
+		t.Errorf("stored: %+v", got)
+	}
+	// the app is told how much came back
+	if v := viewOf(got); v.RefundedKobo != 978_875 || v.TotalKobo != 10_000_00 {
+		t.Errorf("app view: %+v", v)
+	}
+
+	// Leaving it out means the whole total went back, and only a refunded order shows an amount.
+	full := refundDue(t, f, "r6")
+	postRefunded(t, srv, full.ID, `{}`)
+	g, _ := f.svc.Store.ByID(ctx, full.ID)
+	if g.Refunded() != 10_000_00 || g.RefundAmountKobo != 0 {
+		t.Errorf("a full refund: refunded %d, recorded %d", g.Refunded(), g.RefundAmountKobo)
+	}
+	if (Order{Status: StatusRefundDue, TotalKobo: 5_00, AmountKobo: 5_00}).Refunded() != 0 {
+		t.Error("an order still waiting for its refund has had nothing sent back")
+	}
+	body, _ := json.Marshal(viewOf(refundDue(t, f, "r7")))
+	if strings.Contains(string(body), "refunded_kobo") {
+		t.Errorf("not refunded yet, so no refunded_kobo: %s", body)
+	}
+
+	// More than the customer paid, or a negative amount, is refused.
+	r := refundDue(t, f, "r8")
+	for _, body := range []string{`{"refund_amount_kobo":10000001}`, `{"refund_amount_kobo":-5}`} {
+		if code, _ := postRefunded(t, srv, r.ID, body); code != 400 {
+			t.Errorf("%s: got %d, want 400", body, code)
+		}
+	}
+	if left, _ := f.svc.Store.ByID(ctx, r.ID); left.Status != StatusRefundDue {
+		t.Errorf("a refused call must change nothing: %s", left.Status)
+	}
+}
+
+// The money kept out of a refund offsets what the transaction cost, so a refund
+// that deducts exactly the costs leaves the net profit where it was.
+func TestKeptFromRefundsOffsetsTheCosts(t *testing.T) {
+	store, err := OpenStore(t.TempDir() + "/kept.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	seed(t, store, Order{Kind: KindAirtime, Network: "a", NetworkName: "MTN", AmountKobo: 10_000_00, CostKobo: 9_900_00, TotalKobo: 10_000_00,
+		PaymentFeeKobo: 161_25}, StatusRefundDue, day(2026, 10, 16, 22, 0))
+	var id string
+	store.db.QueryRow(`SELECT id FROM orders`).Scan(&id)
+	if _, err := store.MarkRefunded(context.Background(), id, 50_00, 10_000_00-161_25-50_00, "", false); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Stats(context.Background(), day(2026, 10, 16, 0, 0), day(2026, 10, 16, 0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := st.Money
+	if m.KeptFromRefundsKobo != 161_25+50_00 || m.FeesOnUndeliveredKobo != 161_25 || m.RefundFeesKobo != 50_00 {
+		t.Fatalf("kept %d, fees %d, refund fees %d", m.KeptFromRefundsKobo, m.FeesOnUndeliveredKobo, m.RefundFeesKobo)
+	}
+	if m.NetProfitKobo != 0 {
+		t.Errorf("deducting exactly the costs should cost nothing, net profit %d", m.NetProfitKobo)
 	}
 }

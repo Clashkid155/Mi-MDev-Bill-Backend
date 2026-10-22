@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS orders (
     total_kobo      INTEGER NOT NULL DEFAULT 0, -- what the customer pays: amount + fee (0 on old orders: they paid the amount)
     payment_fee_kobo INTEGER NOT NULL DEFAULT 0, -- what the payment provider took, known once paid
     refund_fee_kobo INTEGER NOT NULL DEFAULT 0, -- what sending a refund cost us, set when a REFUND_DUE order is marked refunded
+    refund_amount_kobo INTEGER NOT NULL DEFAULT 0, -- what went back to the customer; 0 means all of it
     refund_note     TEXT NOT NULL DEFAULT '',
     refunded_at     INTEGER NOT NULL DEFAULT 0, -- unix seconds
     customer_email  TEXT NOT NULL,

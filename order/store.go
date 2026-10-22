@@ -34,12 +34,16 @@ type Order struct {
 	// Set when REFUND_DUE is closed by MarkRefunded: what the refund cost us, a note
 	// about it, and when it was done.
 	RefundFeeKobo int64
-	RefundNote    string
-	RefundedAt    time.Time
-	CustomerEmail string
-	CustomerName  string
-	NetworkName   string // snapshot of the catalog's display name at purchase; ABS renames things
-	PlanName      string // same, for data plans
+	// RefundAmountKobo is what was actually sent back to the customer. 0 means all of
+	// it (the whole of Due), also for refunds recorded before this was kept. A smaller
+	// amount means the costs of the transaction were deducted.
+	RefundAmountKobo int64
+	RefundNote       string
+	RefundedAt       time.Time
+	CustomerEmail    string
+	CustomerName     string
+	NetworkName      string // snapshot of the catalog's display name at purchase; ABS renames things
+	PlanName         string // same, for data plans
 	// PlanNote is ABS's note on the plan as it was at purchase (a fair use limit,
 	// "won't credit if the line owes airtime"): what the customer was told.
 	PlanNote     string
@@ -63,6 +67,18 @@ func (o Order) Due() int64 {
 		return o.TotalKobo
 	}
 	return o.AmountKobo
+}
+
+// Refunded is how much of a REFUNDED order's money went back to the customer: what
+// was recorded, or all of it when nothing smaller was recorded.
+func (o Order) Refunded() int64 {
+	if o.Status != StatusRefunded {
+		return 0
+	}
+	if o.RefundAmountKobo > 0 {
+		return o.RefundAmountKobo
+	}
+	return o.Due()
 }
 
 // Profit is what a SUCCESS order earned: what the customer paid, less what the
@@ -98,7 +114,7 @@ func OpenStore(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refunded_at"} {
+	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refund_amount_kobo", "refunded_at"} {
 		if err := addColumnIfMissing(db, "orders", column, "INTEGER NOT NULL DEFAULT 0"); err != nil {
 			db.Close()
 			return nil, err
@@ -164,7 +180,7 @@ func newID() string {
 // idGen makes order ids; tests replace it to force a clash.
 var idGen = newID
 
-const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, refund_fee_kobo, refund_note, refunded_at, customer_email, customer_name, network_name, plan_name, plan_note, status,
+const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, refund_fee_kobo, refund_amount_kobo, refund_note, refunded_at, customer_email, customer_name, network_name, plan_name, plan_note, status,
 	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response,
 	created_at, updated_at`
 
@@ -172,7 +188,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var o Order
 	var status string
 	var expires, created, updated, refunded int64
-	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CostKobo, &o.FeeKobo, &o.TotalKobo, &o.PaymentFeeKobo, &o.RefundFeeKobo, &o.RefundNote, &refunded, &o.CustomerEmail,
+	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CostKobo, &o.FeeKobo, &o.TotalKobo, &o.PaymentFeeKobo, &o.RefundFeeKobo, &o.RefundAmountKobo, &o.RefundNote, &refunded, &o.CustomerEmail,
 		&o.CustomerName, &o.NetworkName, &o.PlanName, &o.PlanNote, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
 		&expires, &o.VendResponse, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -279,14 +295,17 @@ var ErrNotRefundable = errors.New("order: not waiting for a refund")
 //
 // feeReturned says the payment provider gave back its fee on the original payment
 // (then it is no longer a cost, and the order's payment fee becomes 0).
-func (s *Store) MarkRefunded(ctx context.Context, id string, refundFeeKobo int64, note string, feeReturned bool) (Order, error) {
+//
+// refundAmountKobo is what was sent back to the customer: 0 for all of it, or less
+// when the transaction's costs were deducted.
+func (s *Store) MarkRefunded(ctx context.Context, id string, refundFeeKobo, refundAmountKobo int64, note string, feeReturned bool) (Order, error) {
 	if err := Check(StatusRefundDue, StatusRefunded); err != nil {
 		return Order{}, err
 	}
 	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx, `UPDATE orders SET status = ?, refund_fee_kobo = ?, refund_note = ?, refunded_at = ?, updated_at = ?,
+	res, err := s.db.ExecContext(ctx, `UPDATE orders SET status = ?, refund_fee_kobo = ?, refund_amount_kobo = ?, refund_note = ?, refunded_at = ?, updated_at = ?,
 			payment_fee_kobo = CASE WHEN ? THEN 0 ELSE payment_fee_kobo END
-		WHERE id = ? AND status = ?`, StatusRefunded, refundFeeKobo, note, now, now, feeReturned, id, StatusRefundDue)
+		WHERE id = ? AND status = ?`, StatusRefunded, refundFeeKobo, refundAmountKobo, note, now, now, feeReturned, id, StatusRefundDue)
 	if err != nil {
 		return Order{}, err
 	}
