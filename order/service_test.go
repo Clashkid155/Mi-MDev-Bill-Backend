@@ -54,6 +54,7 @@ type fakes struct {
 	spendPath string
 	spendForm url.Values
 	lastEmail email.Message
+	allEmails []email.Message // every message the fake ZeptoMail accepted, in order
 }
 
 func newFakes(t *testing.T) *fakes {
@@ -84,6 +85,9 @@ func newFakes(t *testing.T) *fakes {
 			f.lastEmail = email.Message{
 				To: body.To[0].EmailAddress.Address, ToName: body.To[0].EmailAddress.Name,
 				Subject: body.Subject, Text: body.TextBody, HTML: body.HTMLBody,
+			}
+			if f.emailOK.Load() { // a message the fake refuses was not delivered
+				f.allEmails = append(f.allEmails, f.lastEmail)
 			}
 			f.mu.Unlock()
 		}

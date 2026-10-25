@@ -61,6 +61,15 @@ type Config struct {
 	ElectricityFeeMinNaira       int64
 	PaymentFeeWarnPercent        float64
 
+	// Alerts. AdminAlertEmail is where the server emails problems that need a person
+	// (a refund is due, an order's outcome is unknown, the ABS wallet is empty, the
+	// payment fee is too high); it needs the email settings above. The server also
+	// checks the ABS wallet every ABSBalanceCheckMinutes and warns when it falls
+	// below ABSLowBalanceNaira (0 turns that check off).
+	AdminAlertEmail        string
+	ABSLowBalanceNaira     int64
+	ABSBalanceCheckMinutes int64
+
 	// AdminToken protects /admin and, when they are mounted, the direct /abs,
 	// /monnify and /email endpoints. It is required whenever real money can be
 	// spent (production, or ABS_SANDBOX=false), when only /admin is served.
@@ -140,6 +149,23 @@ func LoadConfig() (Config, error) {
 		if *p.into, err = envFloat(p.key, p.fallback); err != nil {
 			return c, err
 		}
+	}
+	c.AdminAlertEmail = strings.TrimSpace(os.Getenv("ADMIN_ALERT_EMAIL"))
+	lowBalance, err := envFloat("ABS_LOW_BALANCE_NAIRA", 0)
+	if err != nil {
+		return c, err
+	}
+	c.ABSLowBalanceNaira = int64(lowBalance)
+	checkEvery, err := envFloat("ABS_BALANCE_CHECK_MINUTES", 15)
+	if err != nil {
+		return c, err
+	}
+	if checkEvery < 1 {
+		return c, fmt.Errorf("ABS_BALANCE_CHECK_MINUTES must be at least 1, got %v", checkEvery)
+	}
+	c.ABSBalanceCheckMinutes = int64(checkEvery)
+	if c.AdminAlertEmail != "" && !c.MailConfigured() {
+		return c, fmt.Errorf("ADMIN_ALERT_EMAIL needs ZEPTOMAIL_TOKEN and MAIL_FROM_EMAIL to send the alerts")
 	}
 	largeFrom, err := envFloat("MARKUP_LARGE_FROM_NAIRA", 20000)
 	if err != nil {

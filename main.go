@@ -78,6 +78,21 @@ func serve(cfg Config, log *slog.Logger) {
 		log.Info("Config", "detail", "email disabled: ZEPTOMAIL_TOKEN/MAIL_FROM_EMAIL not set")
 	}
 
+	// Alerts go to the owner's email through the same mailer. Without both an
+	// address and a mailer they are only logged.
+	var alerts order.Alerter
+	var emailAlerts *order.EmailAlerts
+	if mailer != nil && cfg.AdminAlertEmail != "" {
+		emailAlerts = order.NewEmailAlerts(mailer, cfg.AdminAlertEmail, log)
+		alerts = emailAlerts
+		log.Info("Config", "detail", "alerts go to "+cfg.AdminAlertEmail)
+		if cfg.MailSandbox {
+			log.Info("Config", "detail", "alert emails are only logged while MAIL_SANDBOX is on")
+		}
+	} else {
+		log.Info("Config", "detail", "alerts are only logged: set ADMIN_ALERT_EMAIL (and the email settings) to be emailed")
+	}
+
 	api := &order.API{
 		Service: &order.Service{
 			Store:          store,
@@ -87,6 +102,7 @@ func serve(cfg Config, log *slog.Logger) {
 			Mailer:         mailer,
 			MinPaymentKobo: cfg.MinPaymentKobo,
 			Pricing:        cfg.Pricing(),
+			Alerts:         alerts,
 			FeeWarnPercent: cfg.PaymentFeeWarnPercent,
 		},
 		MonnifySecret:          cfg.MonnifySecretKey,
@@ -121,6 +137,9 @@ func serve(cfg Config, log *slog.Logger) {
 	defer stop()
 
 	go api.Sweep(ctx, 5*time.Minute)
+	if emailAlerts != nil && cfg.ABSLowBalanceNaira > 0 {
+		go api.WatchBalance(ctx, time.Duration(cfg.ABSBalanceCheckMinutes)*time.Minute, cfg.ABSLowBalanceNaira*100)
+	}
 
 	go func() {
 		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox))
@@ -135,4 +154,7 @@ func serve(cfg Config, log *slog.Logger) {
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
 	api.Wait() // let in-flight purchases finish
+	if emailAlerts != nil {
+		emailAlerts.Wait() // and alerts being sent
+	}
 }

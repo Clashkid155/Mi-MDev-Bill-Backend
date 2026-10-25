@@ -24,6 +24,10 @@ type Service struct {
 	// Mailer sends the purchase-successful email. Nil disables it (no email
 	// provider configured); this is optional, unlike Pay and Vendor.
 	Mailer *email.Client
+	// Alerts tells the owner when something needs a person: a refund is due, an
+	// order's outcome is unknown, the ABS wallet is empty, the payment fee is too
+	// high. Nil sends nothing (the log still records it).
+	Alerts Alerter
 	// MinPaymentKobo is the smallest payment the payment provider accepts
 	// (Kora: 10000, i.e. ₦100). Airtime below it cannot be ordered and data
 	// plans priced below it are refused and hidden from the catalog. 0 means no
@@ -169,6 +173,7 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 			return nil, err
 		}
 		s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: %d kobo arrived after it expired, refund needed", o.ID, txn.ReceivedKobo))
+		s.alertRefundDue(o, "the payment arrived after the order had expired, so nothing was bought")
 		return nil, nil
 	}
 	moved, err := s.Store.Move(ctx, o.ID, o.Status, StatusPaid)
@@ -198,6 +203,9 @@ func (s *Service) recordPaymentFee(ctx context.Context, o Order, txn payment.Pay
 			s.Log.Warn("PaymentFee - Order", "detail", fmt.Sprintf(
 				"order %s: the payment provider took %.2f%% (%d kobo of %d), above the %.2f%% prices were worked out for; check the fee agreement",
 				o.ID, percent, txn.FeeKobo, txn.ReceivedKobo, s.FeeWarnPercent))
+			s.alert("fee-watch", feeWatchEvery, fmt.Sprintf("Payment fee is %.2f%%, above the %.2f%% prices were built for", percent, s.FeeWarnPercent),
+				fmt.Sprintf("Order %s: the payment provider took %s of a %s payment (%.2f%%).\n\nPrices assume about 1.61%%. If this is the new rate, the markups may need raising; "+
+					"check the fee in the provider's dashboard.\n", o.ID, formatNaira(txn.FeeKobo), formatNaira(txn.ReceivedKobo), percent))
 		}
 	}
 }
@@ -267,11 +275,15 @@ func (s *Service) Vend(ctx context.Context, o Order) error {
 		}
 	case abs.Failed:
 		if _, err = s.Store.MoveWithVendResponse(ctx, o.ID, StatusVending, StatusFailed, raw); err == nil {
-			_, err = s.Store.Move(ctx, o.ID, StatusFailed, StatusRefundDue)
+			if _, err = s.Store.Move(ctx, o.ID, StatusFailed, StatusRefundDue); err == nil {
+				s.alertRefundDue(o, result.Message)
+			}
 		}
 	default:
 		// Outcome unknown. Stays PENDING until ABS's webhook or a manual check settles it.
-		_, err = s.Store.MoveWithVendResponse(ctx, o.ID, StatusVending, StatusPending, raw)
+		if _, err = s.Store.MoveWithVendResponse(ctx, o.ID, StatusVending, StatusPending, raw); err == nil {
+			s.alertPending(o, result.Message)
+		}
 	}
 	return err
 }
