@@ -62,6 +62,7 @@ func (a *API) Routes() http.Handler {
 //	GET /admin/orders?status=PENDING,REFUND_DUE&limit=50
 //	GET /admin/webhooks?provider=monnify&limit=20    (raw bodies as received)
 //	POST /admin/orders/{id}/refunded {"refund_fee_kobo":5000,"refund_amount_kobo":983875,"note":"..."}  (after sending the money back by hand)
+//	POST /admin/expenses {"category":"hosting","label":"Server","amount_kobo":1500000}; GET /admin/expenses?from=&to=; DELETE /admin/expenses/{id}
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
 //	GET /admin/balances                              (what ABS and the payment provider are holding)
 //
@@ -71,6 +72,9 @@ func (a *API) AdminRoutes() http.Handler {
 	mux.HandleFunc("GET /admin/orders", a.listOrders)
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
 	mux.HandleFunc("POST /admin/orders/{id}/refunded", a.markRefunded)
+	mux.HandleFunc("POST /admin/expenses", a.addExpense)
+	mux.HandleFunc("GET /admin/expenses", a.listExpenses)
+	mux.HandleFunc("DELETE /admin/expenses/{id}", a.deleteExpense)
 	mux.HandleFunc("GET /admin/stats", a.stats)
 	mux.HandleFunc("GET /admin/balances", a.balances)
 	return mux
@@ -80,8 +84,24 @@ func (a *API) AdminRoutes() http.Handler {
 // profit, money at risk and a daily series. GET /admin/stats?from=2026-10-01&to=2026-10-20
 // (Nigerian days, inclusive); without them it is the last 30 days.
 func (a *API) stats(w http.ResponseWriter, r *http.Request) {
+	from, to, ok := windowOf(w, r)
+	if !ok {
+		return
+	}
+	st, err := a.Store.Stats(r.Context(), from, to)
+	if err != nil {
+		a.Log.Error("Stats - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	reply.OK(w, http.StatusOK, st)
+}
+
+// windowOf reads ?from=&to= (Nigerian days, inclusive; the last 30 days when
+// absent) and answers 400 itself when they are wrong.
+func windowOf(w http.ResponseWriter, r *http.Request) (from, to time.Time, ok bool) {
 	today := time.Now().In(lagos)
-	from, to := today.AddDate(0, 0, -29), today
+	from, to = today.AddDate(0, 0, -29), today
 	parse := func(name string, into *time.Time) bool {
 		raw := r.URL.Query().Get(name)
 		if raw == "" {
@@ -96,23 +116,17 @@ func (a *API) stats(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 	if !parse("from", &from) || !parse("to", &to) {
-		return
+		return from, to, false
 	}
 	if to.Before(from) {
 		reply.Fail(w, http.StatusBadRequest, "to must not be before from")
-		return
+		return from, to, false
 	}
 	if to.Sub(from) > 366*24*time.Hour {
 		reply.Fail(w, http.StatusBadRequest, "ask for at most a year at a time")
-		return
+		return from, to, false
 	}
-	st, err := a.Store.Stats(r.Context(), from, to)
-	if err != nil {
-		a.Log.Error("Stats - API", "detail", err.Error())
-		reply.Fail(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	reply.OK(w, http.StatusOK, st)
+	return from, to, true
 }
 
 // A balancer is a payment provider that can say how much it is holding.

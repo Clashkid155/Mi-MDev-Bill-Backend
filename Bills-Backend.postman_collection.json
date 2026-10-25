@@ -1212,6 +1212,85 @@
 						},
 						"description": "Closes an order that is in REFUND_DUE after you have sent the money back by hand (this moves no money itself), so the app stops saying it is waiting for a refund. Every field is optional: refund_fee_kobo is what sending the refund cost (it reduces the net profit in /admin/stats), note is for the record, payment_fee_returned: true says the payment provider gave back its fee on the original payment. 409 for an order that is not in REFUND_DUE, 404 for an unknown one. Needs the admin token. refund_amount_kobo is what you actually sent back to the customer: leave it out for the whole total, or give the smaller amount when you deducted the costs of the transaction (it is shown to the customer as refunded_kobo and the difference counts as money kept in /admin/stats)."
 					}
+				},
+				{
+					"name": "Add expense (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/expenses",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"expenses"
+							]
+						},
+						"description": "Records money the business spent that no order records, so /admin/stats can show profit_after_expenses_kobo. Only category, label and amount_kobo are required; day defaults to today (Nigerian time). Categories are free text; hosting, email, agent_fee, domain and transfer_duty are the ones in use (the 50 naira duty on our own transfers of 10,000 naira or more, such as ABS top-ups, belongs under transfer_duty). Needs the admin token.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"day\": \"2026-10-20\",\n  \"category\": \"agent_fee\",\n  \"label\": \"ABS agent plan, one year\",\n  \"amount_kobo\": 999900,\n  \"note\": \"\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					}
+				},
+				{
+					"name": "List expenses (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/expenses?from=2026-10-01&to=2026-10-31",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"expenses"
+							],
+							"query": [
+								{
+									"key": "from",
+									"value": "2026-10-01"
+								},
+								{
+									"key": "to",
+									"value": "2026-10-31"
+								}
+							]
+						},
+						"description": "Expenses for a window of Nigerian days (default the last 30), newest first, with the total and the total per category."
+					}
+				},
+				{
+					"name": "Delete expense (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/expenses/1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"expenses",
+								"1"
+							]
+						},
+						"description": "Removes a wrongly entered expense by its id (shown when it was added or listed). 404 if there is no such expense."
+					}
 				}
 			],
 			"description": "The real purchase flow: create an order, pay into the account it returns, then poll the order."

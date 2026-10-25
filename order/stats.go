@@ -45,11 +45,18 @@ type Stats struct {
 		MarginPercent         float64 `json:"margin_percent"` // profit / revenue, over orders with a known cost
 		AverageOrderKobo      int64   `json:"average_order_kobo"`
 		FeesOnUndeliveredKobo int64   `json:"payment_fees_on_undelivered_kobo"`
-		RefundFeesKobo        int64   `json:"refund_fees_kobo"`
+		RefundFeesKobo        int64   `json:"refund_fees_kobo"` // what sending refunds cost
 		// KeptFromRefundsKobo is money deducted from refunds to cover the costs of the transaction.
-		KeptFromRefundsKobo int64 `json:"kept_from_refunds_kobo"` // what sending refunds cost
+		KeptFromRefundsKobo int64 `json:"kept_from_refunds_kobo"`
 		NetProfitKobo       int64 `json:"net_profit_kobo"`
 		OrdersWithoutCost   int   `json:"orders_without_cost"`
+
+		// Expenses are what was entered with POST /admin/expenses for these days
+		// (hosting, email, the agent fee...). ProfitAfterExpensesKobo is the number
+		// that says whether the business made money.
+		ExpensesKobo            int64           `json:"expenses_kobo"`
+		ExpensesByCategory      []CategoryTotal `json:"expenses_by_category"`
+		ProfitAfterExpensesKobo int64           `json:"profit_after_expenses_kobo"`
 	} `json:"money"`
 
 	AtRisk struct {
@@ -164,6 +171,11 @@ func (s *Store) Stats(ctx context.Context, from, to time.Time) (Stats, error) {
 		return st, err
 	}
 	st.Money.NetProfitKobo = st.Money.ProfitKobo - st.Money.FeesOnUndeliveredKobo - st.Money.RefundFeesKobo + st.Money.KeptFromRefundsKobo
+
+	if st.Money.ExpensesKobo, st.Money.ExpensesByCategory, err = s.expensesBetween(ctx, st.From, st.To); err != nil {
+		return st, err
+	}
+	st.Money.ProfitAfterExpensesKobo = st.Money.NetProfitKobo - st.Money.ExpensesKobo
 
 	// Delivered orders, grouped.
 	group := func(column, label string, limit int, orderBy string) ([]Breakdown, error) {

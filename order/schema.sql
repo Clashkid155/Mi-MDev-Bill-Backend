@@ -42,3 +42,17 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     body        TEXT NOT NULL,
     received_at INTEGER NOT NULL
 );
+
+-- Money the business spends that no order records: hosting, email, the ABS agent
+-- fee, a domain, the 50 naira duty on our own transfers. Entered by hand through
+-- the admin API so /admin/stats can show a profit after expenses.
+CREATE TABLE IF NOT EXISTS expenses (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    day         TEXT NOT NULL,                     -- the Nigerian day it belongs to, YYYY-MM-DD
+    category    TEXT NOT NULL,                     -- hosting, email, agent_fee, domain, transfer_duty, other, ...
+    label       TEXT NOT NULL,
+    amount_kobo INTEGER NOT NULL CHECK (amount_kobo > 0),
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS expenses_day ON expenses (day);
