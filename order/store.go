@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -98,7 +100,12 @@ var ErrNotFound = errors.New("order: not found")
 type Store struct{ db *sql.DB }
 
 func OpenStore(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	if err := keepPrivate(path); err != nil {
+		return nil, err
+	}
+	// foreign_keys: nothing refers to anything yet, but a reference added later
+	// should be enforced from its first day.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +113,12 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// Refuse to run on a damaged file: better a stopped server than silently wrong money.
+	var check string
+	if err := db.QueryRow(`PRAGMA quick_check`).Scan(&check); err != nil || check != "ok" {
+		db.Close()
+		return nil, fmt.Errorf("the database file %s is damaged (restore the latest backup): %v %s", path, err, check)
 	}
 	// Databases created before these columns existed need them added.
 	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name", "plan_note"} {
@@ -124,7 +137,34 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// SQLite gives the -wal and -shm files the main file's permissions; make sure
+	// the main file is the private one it was above.
+	_ = keepPrivate(path)
 	return &Store{db: db}, nil
+}
+
+// keepPrivate makes the database file readable by its owner only: it holds
+// customers' emails and phone numbers and the electricity tokens we sold. A
+// missing file is created empty with those permissions first, so there is never
+// a moment when it is open to others.
+func keepPrivate(path string) error {
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
@@ -407,6 +447,17 @@ func (s *Store) Webhooks(ctx context.Context, provider string, limit int) ([]Web
 		events = append(events, e)
 	}
 	return events, rows.Err()
+}
+
+// PurgeWebhooks deletes the raw webhook bodies received before the cutoff and
+// says how many went. They are an audit trail, not the record of any sale (the
+// order is), so they do not need to be kept forever.
+func (s *Store) PurgeWebhooks(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM webhook_events WHERE received_at < ?`, before.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) LogWebhook(ctx context.Context, provider, eventKey string, body []byte) error {

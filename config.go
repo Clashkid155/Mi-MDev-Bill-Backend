@@ -80,6 +80,16 @@ type Config struct {
 	// the proxy's. Leave it off when the server is reached directly, because the
 	// header can then be forged.
 	TrustProxy bool
+
+	// BackupDir is where the server saves a snapshot of the database every
+	// BackupEveryMinutes (empty turns the snapshots off). Copy them off the
+	// server too; see deploy/README.md.
+	BackupDir          string
+	BackupEveryMinutes int64
+
+	// WebhookRetentionDays is how long the raw webhook bodies are kept (0 keeps
+	// them forever). Orders themselves are never deleted.
+	WebhookRetentionDays int64
 }
 
 // MailConfigured reports whether enough is set to actually send email;
@@ -124,6 +134,7 @@ func LoadConfig() (Config, error) {
 		MailSandbox:         envOr("MAIL_SANDBOX", "true") != "false",
 		AdminToken:          os.Getenv("ADMIN_TOKEN"),
 		TrustProxy:          envOr("TRUST_PROXY", "false") == "true",
+		BackupDir:           strings.TrimSpace(os.Getenv("BACKUP_DIR")),
 	}
 	if c.PaymentProvider != "monnify" && c.PaymentProvider != "kora" {
 		return c, fmt.Errorf("PAYMENT_PROVIDER must be monnify or kora, got %q", c.PaymentProvider)
@@ -171,6 +182,22 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("ABS_BALANCE_CHECK_MINUTES must be at least 1, got %v", checkEvery)
 	}
 	c.ABSBalanceCheckMinutes = int64(checkEvery)
+	backupEvery, err := envFloat("BACKUP_EVERY_MINUTES", 60)
+	if err != nil {
+		return c, err
+	}
+	if backupEvery < 1 {
+		return c, fmt.Errorf("BACKUP_EVERY_MINUTES must be at least 1, got %v", backupEvery)
+	}
+	c.BackupEveryMinutes = int64(backupEvery)
+	retention, err := envFloat("WEBHOOK_RETENTION_DAYS", 90)
+	if err != nil {
+		return c, err
+	}
+	if retention < 0 {
+		return c, fmt.Errorf("WEBHOOK_RETENTION_DAYS must be 0 (keep forever) or more, got %v", retention)
+	}
+	c.WebhookRetentionDays = int64(retention)
 	if c.AdminAlertEmail != "" && !c.MailConfigured() {
 		return c, fmt.Errorf("ADMIN_ALERT_EMAIL needs ZEPTOMAIL_TOKEN and MAIL_FROM_EMAIL to send the alerts")
 	}

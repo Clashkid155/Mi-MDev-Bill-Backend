@@ -30,13 +30,19 @@ type API struct {
 	// VerifyMonnifySignature must be true in production. Monnify does not sign
 	// sandbox webhooks; ConfirmPayment still re-checks every payment with Monnify.
 	VerifyMonnifySignature bool
-	ABSWebhookSecret       string // empty skips signature checks (sandbox only)
+	ABSWebhookSecret       string // empty skips signature checks, unless RequireSignatures
+	// RequireSignatures is set whenever real money is in use: a webhook that cannot
+	// be checked is refused instead of waved through (ABS with no secret set).
+	RequireSignatures bool
+	// WebhookRetention is how long raw webhook bodies are kept; 0 keeps them forever.
+	WebhookRetention time.Duration
 	// KoraSecret is Kora's secret key; it signs Kora's webhooks, test ones too.
 	// Empty means Kora is not in use and its webhook is refused.
 	KoraSecret string
 
 	vending     sync.WaitGroup
 	lastChecked sync.Map // order id -> when Monnify was last asked about it
+	lastPurge   time.Time
 }
 
 const paymentCheckEvery = 5 * time.Second
@@ -638,6 +644,7 @@ func (a *API) Sweep(ctx context.Context, every time.Duration) {
 }
 
 func (a *API) sweepOnce(ctx context.Context) {
+	a.purgeWebhooks(ctx)
 	orders, err := a.Store.AwaitingPastExpiry(ctx, time.Now(), 100)
 	if err != nil {
 		a.Log.Error("Sweep - Order", "detail", err.Error())
@@ -652,6 +659,23 @@ func (a *API) sweepOnce(ctx context.Context) {
 		if paid != nil {
 			a.vendInBackground(*paid)
 		}
+	}
+}
+
+// purgeWebhooks deletes raw webhook bodies older than the retention, at most
+// once a day.
+func (a *API) purgeWebhooks(ctx context.Context) {
+	if a.WebhookRetention <= 0 || time.Since(a.lastPurge) < 24*time.Hour {
+		return
+	}
+	a.lastPurge = time.Now()
+	n, err := a.Store.PurgeWebhooks(ctx, time.Now().Add(-a.WebhookRetention))
+	if err != nil {
+		a.Log.Error("Sweep - Order", "detail", "could not purge old webhooks: "+err.Error())
+		return
+	}
+	if n > 0 {
+		a.Log.Info("Sweep - Order", "detail", fmt.Sprintf("deleted %d webhook records older than %d days", n, int(a.WebhookRetention.Hours()/24)))
 	}
 }
 
@@ -682,6 +706,10 @@ func (a *API) absWebhook(w http.ResponseWriter, r *http.Request) {
 			reply.Fail(w, http.StatusUnauthorized, "bad signature")
 			return
 		}
+	} else if a.RequireSignatures {
+		a.Log.Warn("Webhook - API", "detail", "refused an ABS webhook: ABS_WEBHOOK_SECRET is not set")
+		reply.Fail(w, http.StatusUnauthorized, "webhook signatures are not set up")
+		return
 	}
 	if err := a.Store.LogWebhook(r.Context(), "abs", r.Header.Get("X-ABS-Delivery"), body); err != nil {
 		a.Log.Error("Webhook - API", "detail", "could not save webhook: "+err.Error())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,6 +22,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "verify-backup" {
+		os.Exit(verifyBackup(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	log := logging.New(os.Stdout, slog.LevelInfo)
 
 	cfg, err := LoadConfig()
@@ -30,6 +34,26 @@ func main() {
 	}
 
 	serve(cfg, log)
+}
+
+// verifyBackup is `bills verify-backup <file>`: it opens a snapshot the way a
+// restore would, checks it is intact and prints what is in it, so a person can
+// see that the numbers match the business. It exits 1 if the file is no good.
+func verifyBackup(args []string, out, errOut io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(errOut, "usage: verify-backup <snapshot.db>")
+		return 2
+	}
+	sum, err := order.VerifyBackup(context.Background(), args[0])
+	if err != nil {
+		fmt.Fprintln(errOut, "BAD BACKUP:", err)
+		return 1
+	}
+	fmt.Fprintf(out, "backup ok: %d orders, %d expenses, %d settings\n", sum.Orders, sum.Expenses, sum.Settings)
+	if !sum.LatestOrderAt.IsZero() {
+		fmt.Fprintf(out, "latest order: %s\n", sum.LatestOrderAt.Format(time.RFC3339))
+	}
+	return 0
 }
 
 func serve(cfg Config, log *slog.Logger) {
@@ -121,8 +145,10 @@ func serve(cfg Config, log *slog.Logger) {
 			FeeWarnPercent: cfg.PaymentFeeWarnPercent,
 		},
 		MonnifySecret:          cfg.MonnifySecretKey,
-		VerifyMonnifySignature: cfg.IsProduction(),
+		VerifyMonnifySignature: cfg.RealMoney(),
 		ABSWebhookSecret:       cfg.ABSWebhookSecret,
+		RequireSignatures:      cfg.RealMoney(),
+		WebhookRetention:       time.Duration(cfg.WebhookRetentionDays) * 24 * time.Hour,
 		KoraSecret:             cfg.KoraSecretKey,
 	}
 
@@ -154,6 +180,12 @@ func serve(cfg Config, log *slog.Logger) {
 	defer stop()
 
 	go api.Sweep(ctx, 5*time.Minute)
+	if cfg.BackupDir != "" {
+		go api.WatchBackups(ctx, cfg.BackupDir, time.Duration(cfg.BackupEveryMinutes)*time.Minute)
+		log.Info("Config", "detail", fmt.Sprintf("database snapshots to %s every %d minutes", cfg.BackupDir, cfg.BackupEveryMinutes))
+	} else {
+		log.Warn("Config", "detail", "no database snapshots: set BACKUP_DIR (see deploy/README.md)")
+	}
 	if emailAlerts != nil {
 		go api.WatchBalance(ctx,
 			func() time.Duration { return time.Duration(settings.Int("alerts.check_minutes")) * time.Minute },
