@@ -57,7 +57,7 @@ type fakes struct {
 	allEmails []email.Message // every message the fake ZeptoMail accepted, in order
 }
 
-func newFakes(t *testing.T) *fakes {
+func newFakes(t testing.TB) *fakes {
 	t.Helper()
 	f := &fakes{}
 	f.invoiceState.Store("PENDING")

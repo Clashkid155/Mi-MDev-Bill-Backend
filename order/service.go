@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"Bills-Backend/abs"
@@ -45,6 +46,46 @@ type Service struct {
 	// is more than this percent of it (the fee we planned prices around is about
 	// 1.6%). 0 turns the watch off.
 	FeeWarnPercent float64
+
+	creating keyedLock // one Create at a time per idempotency key
+}
+
+// keyedLock is a mutex per key, for work that must not run twice at once for the
+// same key. The zero value is ready to use. It only works inside one process,
+// which is all this server ever is (SQLite allows one).
+type keyedLock struct {
+	mu    sync.Mutex
+	locks map[string]*heldLock
+}
+
+type heldLock struct {
+	sync.Mutex
+	users int
+}
+
+// lock waits for key and returns the function that lets the next caller in.
+func (k *keyedLock) lock(key string) (unlock func()) {
+	k.mu.Lock()
+	if k.locks == nil {
+		k.locks = map[string]*heldLock{}
+	}
+	l := k.locks[key]
+	if l == nil {
+		l = &heldLock{}
+		k.locks[key] = l
+	}
+	l.users++
+	k.mu.Unlock()
+
+	l.Lock()
+	return func() {
+		l.Unlock()
+		k.mu.Lock()
+		if l.users--; l.users == 0 {
+			delete(k.locks, key)
+		}
+		k.mu.Unlock()
+	}
 }
 
 // SellCatalog is the catalog the customer is shown and orders from: ABS's own,
@@ -90,6 +131,11 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 	if err := r.validate(); err != nil {
 		return Order{}, err
 	}
+	// The app retries a request whose answer it did not see, sometimes while the
+	// first is still running. Taking turns per key makes the second one find the
+	// first one's order instead of failing on the duplicate key or asking the
+	// payment provider for a second account.
+	defer s.creating.lock(r.IdempotencyKey)()
 	o, err := s.Store.ByIdempotencyKey(ctx, r.IdempotencyKey)
 	if errors.Is(err, ErrNotFound) {
 		var p product

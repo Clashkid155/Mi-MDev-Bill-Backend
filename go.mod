@@ -2,6 +2,8 @@ module Bills-Backend
 
 go 1.27
 
+toolchain go1.27.3
+
 require modernc.org/sqlite v1.59.0
 
 require (

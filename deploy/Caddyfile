@@ -1,0 +1,21 @@
+# Caddy gets and renews the HTTPS certificate by itself. Replace the name with
+# your own (its DNS A record must point at this server first).
+api.example.com {
+	encode gzip
+
+	# Tell browsers to only ever use HTTPS for this name.
+	header Strict-Transport-Security "max-age=31536000"
+
+	# The server only listens on 127.0.0.1, so nothing but Caddy can reach it.
+	# Caddy puts the customer's real address in X-Forwarded-For; that is what
+	# TRUST_PROXY=true makes the rate limits use.
+	reverse_proxy 127.0.0.1:8080
+
+	request_body {
+		max_size 2MB
+	}
+
+	log {
+		output file /var/log/caddy/bills-access.log
+	}
+}

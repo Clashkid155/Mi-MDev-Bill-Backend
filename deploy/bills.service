@@ -1,0 +1,35 @@
+# /etc/systemd/system/bills.service
+[Unit]
+Description=Mi MDev bills backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bills
+Group=bills
+WorkingDirectory=/var/lib/bills
+# Secrets live here, readable by root and the bills user only (chmod 640, owner root:bills).
+EnvironmentFile=/etc/bills/env
+ExecStart=/opt/bills/bills-backend
+Restart=on-failure
+RestartSec=5
+# Let a purchase in flight finish when the service is stopped or restarted.
+TimeoutStopSec=150
+
+# The server may write its database and its backups, and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bills /var/backups/bills
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
