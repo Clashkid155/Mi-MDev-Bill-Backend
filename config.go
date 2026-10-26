@@ -225,6 +225,23 @@ func LoadConfig() (Config, error) {
 // HIDDEN_PLANS replaces this list; an empty value hides nothing.
 const defaultHiddenPlans = "5GGUX,PPVK8,P77ZY,PKTS6,PD5ZP,2PV3Y"
 
+// SettingDefaults are the values of the settings the admin API can change, as
+// .env (or the built-in default) has them. An override saved through the API wins
+// over these.
+func (c Config) SettingDefaults() map[string]string {
+	f := func(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+	n := func(v int64) string { return strconv.FormatInt(v, 10) }
+	return map[string]string{
+		"markup.mtn": f(c.MarkupMTN), "markup.mtn_large": f(c.MarkupMTNLarge), "markup.large_from_naira": n(c.MarkupLargeFromNaira),
+		"markup.airtel": f(c.MarkupAirtel), "markup.glo": f(c.MarkupGlo), "markup.9mobile": f(c.Markup9mobile), "markup.default": f(c.MarkupDefault),
+		"hidden_plans":            strings.Join(c.HiddenPlans, ","),
+		"electricity_fee.percent": f(c.ElectricityFeePercent), "electricity_fee.min_naira": n(c.ElectricityFeeMinNaira),
+		"payment_fee_warn_percent": f(c.PaymentFeeWarnPercent),
+		"alerts.email":             c.AdminAlertEmail, "alerts.low_balance_naira": n(c.ABSLowBalanceNaira), "alerts.check_minutes": n(c.ABSBalanceCheckMinutes),
+		"mail.sandbox": strconv.FormatBool(c.MailSandbox),
+	}
+}
+
 // Pricing is the pricing rules in the order package's terms.
 func (c Config) Pricing() order.Pricing {
 	hidden := map[string]bool{}

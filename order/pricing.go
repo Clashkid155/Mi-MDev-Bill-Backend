@@ -134,7 +134,7 @@ func (s *Service) resolve(ctx context.Context, r CreateRequest) (product, error)
 		return resolveData(catalog, r, s.MinPaymentKobo)
 	default:
 		p, err := resolveElectricity(catalog, r, s.MinPaymentKobo)
-		p.FeeKobo = s.Pricing.ElectricityFee(p.AmountKobo)
+		p.FeeKobo = s.pricing().ElectricityFee(p.AmountKobo)
 		return p, err
 	}
 }

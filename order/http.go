@@ -63,6 +63,7 @@ func (a *API) Routes() http.Handler {
 //	GET /admin/webhooks?provider=monnify&limit=20    (raw bodies as received)
 //	POST /admin/orders/{id}/refunded {"refund_fee_kobo":5000,"refund_amount_kobo":983875,"note":"..."}  (after sending the money back by hand)
 //	POST /admin/expenses {"category":"hosting","label":"Server","amount_kobo":1500000}; GET /admin/expenses?from=&to=; DELETE /admin/expenses/{id}
+//	GET /admin/settings; PUT /admin/settings/{key} {"value": ...}; DELETE /admin/settings/{key}; GET /admin/settings/history
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
 //	GET /admin/balances                              (what ABS and the payment provider are holding)
 //
@@ -72,6 +73,10 @@ func (a *API) AdminRoutes() http.Handler {
 	mux.HandleFunc("GET /admin/orders", a.listOrders)
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
 	mux.HandleFunc("POST /admin/orders/{id}/refunded", a.markRefunded)
+	mux.HandleFunc("GET /admin/settings", a.listSettings)
+	mux.HandleFunc("GET /admin/settings/history", a.settingsHistory)
+	mux.HandleFunc("PUT /admin/settings/{key}", a.putSetting)
+	mux.HandleFunc("DELETE /admin/settings/{key}", a.resetSetting)
 	mux.HandleFunc("POST /admin/expenses", a.addExpense)
 	mux.HandleFunc("GET /admin/expenses", a.listExpenses)
 	mux.HandleFunc("DELETE /admin/expenses/{id}", a.deleteExpense)
@@ -513,7 +518,7 @@ func (a *API) catalog(w http.ResponseWriter, r *http.Request) {
 		// out, so it can show the total before the customer orders. The order
 		// itself carries the exact fee.
 		ElectricityFee feeRule `json:"electricity_fee"`
-	}{catalog, feeRule{MinKobo: a.Pricing.ElectricityFeeMinKobo, Percent: a.Pricing.ElectricityFeePercent}})
+	}{catalog, feeRule{MinKobo: a.pricing().ElectricityFeeMinKobo, Percent: a.pricing().ElectricityFeePercent}})
 }
 
 func (a *API) monnifyWebhook(w http.ResponseWriter, r *http.Request) {
@@ -684,4 +689,125 @@ func (a *API) absWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply.OK(w, http.StatusOK, nil)
+}
+
+// ---- settings ----
+
+func (a *API) settingsOn(w http.ResponseWriter) bool {
+	if a.Settings == nil {
+		reply.Fail(w, http.StatusNotFound, "settings are not enabled on this server")
+		return false
+	}
+	return true
+}
+
+// listSettings shows every setting that can be changed here, with its value, its
+// .env default and whether it was changed through the API.
+func (a *API) listSettings(w http.ResponseWriter, r *http.Request) {
+	if !a.settingsOn(w) {
+		return
+	}
+	reply.OK(w, http.StatusOK, map[string]any{"settings": a.Settings.List()})
+}
+
+// settingError turns what Set and Reset return into an answer.
+func (a *API) settingError(w http.ResponseWriter, err error) {
+	var invalid InvalidSettingError
+	switch {
+	case errors.Is(err, ErrUnknownSetting):
+		reply.Fail(w, http.StatusNotFound, "unknown setting; GET /admin/settings lists them")
+	case errors.Is(err, ErrSettingUnavailable):
+		reply.Fail(w, http.StatusConflict, strings.TrimPrefix(err.Error(), ErrSettingUnavailable.Error()+": "))
+	case errors.As(err, &invalid):
+		reply.Fail(w, http.StatusBadRequest, invalid.Message)
+	default:
+		a.Log.Error("Settings - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+	}
+}
+
+// putSetting changes one setting: PUT /admin/settings/{key} {"value": 3}. The value
+// may be a number, a string, a boolean or, for lists, an array of strings.
+func (a *API) putSetting(w http.ResponseWriter, r *http.Request) {
+	if !a.settingsOn(w) {
+		return
+	}
+	var req struct {
+		Value any `json:"value"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil || req.Value == nil {
+		reply.Fail(w, http.StatusBadRequest, `send {"value": ...}`)
+		return
+	}
+	var raw string
+	switch v := req.Value.(type) {
+	case float64:
+		raw = strconv.FormatFloat(v, 'f', -1, 64)
+	case string:
+		raw = v
+	case bool:
+		raw = strconv.FormatBool(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			text, ok := item.(string)
+			if !ok {
+				reply.Fail(w, http.StatusBadRequest, "a list holds strings")
+				return
+			}
+			parts = append(parts, text)
+		}
+		raw = strings.Join(parts, ",")
+	default:
+		reply.Fail(w, http.StatusBadRequest, "value must be a number, a string, a boolean or a list of strings")
+		return
+	}
+	key := r.PathValue("key")
+	view, err := a.Settings.Set(r.Context(), key, raw)
+	if err != nil {
+		a.settingError(w, err)
+		return
+	}
+	message := "setting changed; it applies from the next order"
+	if key == "mail.sandbox" && view.Value == false {
+		message = "setting changed; real emails (customer receipts and your alerts) are now being sent"
+		a.Log.Warn("Settings - API", "detail", "mail.sandbox is off: emails are now really sent")
+	}
+	reply.OKWithMessage(w, http.StatusOK, message, view)
+}
+
+// resetSetting removes a change, so the setting follows .env again.
+func (a *API) resetSetting(w http.ResponseWriter, r *http.Request) {
+	if !a.settingsOn(w) {
+		return
+	}
+	view, err := a.Settings.Reset(r.Context(), r.PathValue("key"))
+	if err != nil {
+		a.settingError(w, err)
+		return
+	}
+	reply.OKWithMessage(w, http.StatusOK, "setting is back to its .env value", view)
+}
+
+// settingsHistory lists the latest changes, newest first: GET /admin/settings/history?limit=50.
+func (a *API) settingsHistory(w http.ResponseWriter, r *http.Request) {
+	if !a.settingsOn(w) {
+		return
+	}
+	limit := 50
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 200 {
+			reply.Fail(w, http.StatusBadRequest, "limit must be between 1 and 200")
+			return
+		}
+		limit = n
+	}
+	changes, err := a.Settings.History(r.Context(), limit)
+	if err != nil {
+		a.Log.Error("SettingsHistory - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	reply.OK(w, http.StatusOK, map[string]any{"count": len(changes), "changes": changes})
 }

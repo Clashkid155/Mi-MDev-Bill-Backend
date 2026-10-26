@@ -41,6 +41,14 @@ func serve(cfg Config, log *slog.Logger) {
 	}
 	defer store.Close()
 
+	// The settings the owner can change from the admin API: .env gives the starting
+	// values and anything changed through the API (saved in the database) wins.
+	settings, err := order.NewSettings(context.Background(), store, cfg.SettingDefaults(), log)
+	if err != nil {
+		log.Error("Settings", "detail", "could not load: "+err.Error())
+		os.Exit(1)
+	}
+
 	vendor := abs.New(cfg.ABSBaseURL, cfg.ABSAPIKey, cfg.ABSSandbox)
 	vendor.Log = log
 	// Only the chosen provider is built; the others' keys can stay empty.
@@ -68,10 +76,10 @@ func serve(cfg Config, log *slog.Logger) {
 	if cfg.MailConfigured() {
 		mailer = email.New(email.Settings{
 			BaseURL: cfg.MailBaseURL, Token: cfg.MailToken, FromEmail: cfg.MailFromEmail,
-			FromName: cfg.MailFromName, BounceAddress: cfg.MailBounceAddress, Sandbox: cfg.MailSandbox,
+			FromName: cfg.MailFromName, BounceAddress: cfg.MailBounceAddress, Sandbox: settings.Bool("mail.sandbox"),
 		})
 		mailer.Log = log
-		if cfg.MailSandbox {
+		if settings.Bool("mail.sandbox") {
 			log.Info("Config", "detail", "email in sandbox: receipts are logged, not sent (MAIL_SANDBOX=false to send)")
 		}
 	} else {
@@ -82,15 +90,22 @@ func serve(cfg Config, log *slog.Logger) {
 	// address and a mailer they are only logged.
 	var alerts order.Alerter
 	var emailAlerts *order.EmailAlerts
-	if mailer != nil && cfg.AdminAlertEmail != "" {
-		emailAlerts = order.NewEmailAlerts(mailer, cfg.AdminAlertEmail, log)
+	settings.SetCapability("mail", mailer != nil)
+	if mailer != nil {
+		emailAlerts = order.NewEmailAlerts(mailer, settings.Text("alerts.email"), log)
 		alerts = emailAlerts
-		log.Info("Config", "detail", "alerts go to "+cfg.AdminAlertEmail)
-		if cfg.MailSandbox {
-			log.Info("Config", "detail", "alert emails are only logged while MAIL_SANDBOX is on")
+		// The address and the sandbox switch can be changed from the admin API.
+		settings.OnChange(func() {
+			mailer.SetSandbox(settings.Bool("mail.sandbox"))
+			emailAlerts.SetTo(settings.Text("alerts.email"))
+		})
+		if settings.Text("alerts.email") != "" {
+			log.Info("Config", "detail", "alerts go to "+settings.Text("alerts.email"))
+		} else {
+			log.Info("Config", "detail", "alerts are only logged: set ADMIN_ALERT_EMAIL (or alerts.email in the admin API) to be emailed")
 		}
 	} else {
-		log.Info("Config", "detail", "alerts are only logged: set ADMIN_ALERT_EMAIL (and the email settings) to be emailed")
+		log.Info("Config", "detail", "alerts are only logged: the email settings are not set")
 	}
 
 	api := &order.API{
@@ -101,6 +116,7 @@ func serve(cfg Config, log *slog.Logger) {
 			Log:            log,
 			Mailer:         mailer,
 			MinPaymentKobo: cfg.MinPaymentKobo,
+			Settings:       settings,
 			Pricing:        cfg.Pricing(),
 			Alerts:         alerts,
 			FeeWarnPercent: cfg.PaymentFeeWarnPercent,
@@ -137,8 +153,10 @@ func serve(cfg Config, log *slog.Logger) {
 	defer stop()
 
 	go api.Sweep(ctx, 5*time.Minute)
-	if emailAlerts != nil && cfg.ABSLowBalanceNaira > 0 {
-		go api.WatchBalance(ctx, time.Duration(cfg.ABSBalanceCheckMinutes)*time.Minute, cfg.ABSLowBalanceNaira*100)
+	if emailAlerts != nil {
+		go api.WatchBalance(ctx,
+			func() time.Duration { return time.Duration(settings.Int("alerts.check_minutes")) * time.Minute },
+			func() int64 { return settings.Int("alerts.low_balance_naira") * 100 })
 	}
 
 	go func() {

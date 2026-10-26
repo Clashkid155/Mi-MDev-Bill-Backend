@@ -44,8 +44,8 @@ func (c *Client) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	message := "sent"
-	if c.sandbox {
+	if c.Sandbox() {
 		message = "sandbox: logged, not sent"
 	}
-	reply.OKWithMessage(w, http.StatusOK, message, map[string]bool{"sandbox": c.sandbox})
+	reply.OKWithMessage(w, http.StatusOK, message, map[string]bool{"sandbox": c.Sandbox()})
 }

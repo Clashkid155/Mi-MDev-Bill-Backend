@@ -1291,6 +1291,101 @@
 						},
 						"description": "Removes a wrongly entered expense by its id (shown when it was added or listed). 404 if there is no such expense."
 					}
+				},
+				{
+					"name": "Settings (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/settings",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"settings"
+							]
+						},
+						"description": "Every setting that can be changed without a restart: its current value, its .env default, source (\"api\" if it was changed here, \"default\" otherwise) and whether this server can use it (the alerts and mail ones need the email settings in .env). Never settable here: keys and secrets, the admin token, the payment provider, ABS_SANDBOX, APP_ENV, the database path and the port. Needs the admin token."
+					}
+				},
+				{
+					"name": "Change a setting (admin)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/settings/markup.airtel",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"settings",
+								"markup.airtel"
+							]
+						},
+						"description": "Changes one setting; it applies from the next order or catalog fetch (orders already made keep their price) and survives a restart. The value may be a number, a string, a boolean or, for hidden_plans, a list of strings. The same rules as startup apply: every markup at least 2%, the electricity fee at least 1.7%; a refused change changes nothing (400). 404 for an unknown key, 409 for a setting that needs the email settings when they are not configured. Setting mail.sandbox to false makes receipts and alerts really send.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"value\": 4.5\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					}
+				},
+				{
+					"name": "Reset a setting (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/settings/markup.airtel",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"settings",
+								"markup.airtel"
+							]
+						},
+						"description": "Removes the change, so the setting follows .env again."
+					}
+				},
+				{
+					"name": "Settings history (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/settings/history?limit=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"settings",
+								"history"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						},
+						"description": "The latest changes to settings, newest first, with what each was before and after. Optional limit (1 to 200, default 50)."
+					}
 				}
 			],
 			"description": "The real purchase flow: create an order, pay into the account it returns, then poll the order."

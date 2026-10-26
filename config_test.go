@@ -110,3 +110,20 @@ func TestAlertSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestSettingDefaultsMirrorTheEnvironment(t *testing.T) {
+	c, err := load(t, map[string]string{"MARKUP_AIRTEL_PERCENT": "4.5", "HIDDEN_PLANS": "A1,B2", "ELECTRICITY_FEE_MIN_NAIRA": "75",
+		"ZEPTOMAIL_TOKEN": "t", "MAIL_FROM_EMAIL": "o@mi.app", "ADMIN_ALERT_EMAIL": "me@example.com", "MAIL_SANDBOX": "false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := c.SettingDefaults()
+	want := map[string]string{"markup.airtel": "4.5", "markup.mtn": "2.5", "markup.mtn_large": "2.2", "markup.large_from_naira": "20000",
+		"hidden_plans": "A1,B2", "electricity_fee.percent": "1.8", "electricity_fee.min_naira": "75", "payment_fee_warn_percent": "1.7",
+		"alerts.email": "me@example.com", "alerts.check_minutes": "15", "alerts.low_balance_naira": "0", "mail.sandbox": "false"}
+	for key, value := range want {
+		if d[key] != value {
+			t.Errorf("%s: got %q, want %q", key, d[key], value)
+		}
+	}
+}

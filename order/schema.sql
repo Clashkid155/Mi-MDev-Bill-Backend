@@ -56,3 +56,20 @@ CREATE TABLE IF NOT EXISTS expenses (
     created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS expenses_day ON expenses (day);
+
+-- Settings changed through the admin API. Each row overrides the value from .env
+-- (or the built-in default); deleting the row puts the .env value back.
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- Every change to a setting: what it was in effect and what it became.
+CREATE TABLE IF NOT EXISTS settings_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    key        TEXT NOT NULL,
+    old_value  TEXT NOT NULL,
+    new_value  TEXT NOT NULL,
+    changed_at INTEGER NOT NULL
+);

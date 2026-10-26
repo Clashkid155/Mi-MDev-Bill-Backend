@@ -25,21 +25,33 @@ type Alerter interface {
 // receipts already use. With MAIL_SANDBOX on the mailer only logs the message.
 type EmailAlerts struct {
 	Mailer *email.Client
-	To     string
 	Log    *slog.Logger
 
 	mu   sync.Mutex
+	to   string // where alerts go; empty means nowhere (see SetTo)
 	last map[string]time.Time
 	wg   sync.WaitGroup
 	now  func() time.Time // replaced in tests
 }
 
 func NewEmailAlerts(mailer *email.Client, to string, log *slog.Logger) *EmailAlerts {
-	return &EmailAlerts{Mailer: mailer, To: to, Log: log, last: map[string]time.Time{}, now: time.Now}
+	return &EmailAlerts{Mailer: mailer, to: to, Log: log, last: map[string]time.Time{}, now: time.Now}
+}
+
+// SetTo changes where alerts go while the server runs; empty stops the emails.
+func (a *EmailAlerts) SetTo(address string) {
+	a.mu.Lock()
+	a.to = address
+	a.mu.Unlock()
 }
 
 func (a *EmailAlerts) Alert(key string, throttle time.Duration, subject, body string) {
 	a.mu.Lock()
+	to := a.to
+	if to == "" { // no address: the log line at the call site is all there is
+		a.mu.Unlock()
+		return
+	}
 	if at, ok := a.last[key]; ok && a.now().Sub(at) < throttle {
 		a.mu.Unlock()
 		return
@@ -52,7 +64,7 @@ func (a *EmailAlerts) Alert(key string, throttle time.Duration, subject, body st
 		defer a.wg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		err := a.Mailer.Send(ctx, email.Message{To: a.To, ToName: "Mi MDev admin", Subject: "[Mi MDev] " + subject, Text: body})
+		err := a.Mailer.Send(ctx, email.Message{To: to, ToName: "Mi MDev admin", Subject: "[Mi MDev] " + subject, Text: body})
 		if err != nil {
 			a.Log.Warn("Alert - Order", "detail", fmt.Sprintf("could not email the alert %q: %v", subject, err))
 			// Not delivered, so let the next occurrence try again.
@@ -124,20 +136,26 @@ func (s *Service) alertPending(o Order, why string) {
 			"if it was delivered nothing more is needed, otherwise the customer is owed a refund.\n")
 }
 
-// WatchBalance checks the ABS wallet every `every` and alerts when it falls
-// below thresholdKobo, until ctx ends. A wallet that runs out is the one failure
-// that turns every order into a refund, so it is worth a warning before it happens.
-func (a *API) WatchBalance(ctx context.Context, every time.Duration, thresholdKobo int64) {
+// WatchBalance checks the ABS wallet and alerts when it falls below the
+// threshold, until ctx ends. A wallet that runs out is the one failure that
+// turns every order into a refund, so it is worth a warning before it happens.
+// Both numbers are asked for again each round, so they can be changed while the
+// server runs; a threshold of 0 means no check.
+func (a *API) WatchBalance(ctx context.Context, every func() time.Duration, thresholdKobo func() int64) {
 	a.vending.Add(1)
 	defer a.vending.Done()
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
 	for {
-		a.checkBalance(ctx, thresholdKobo)
+		if threshold := thresholdKobo(); threshold > 0 {
+			a.checkBalance(ctx, threshold)
+		}
+		wait := every()
+		if wait < time.Minute {
+			wait = time.Minute
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-time.After(wait):
 		}
 	}
 }

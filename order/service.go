@@ -33,6 +33,11 @@ type Service struct {
 	// plans priced below it are refused and hidden from the catalog. 0 means no
 	// minimum beyond ABS's own.
 	MinPaymentKobo int64
+	// Settings, when set, holds the pricing rules and the fee warning limit and lets
+	// the admin change them while the server runs; they are read from it on every
+	// order, so a change applies to the next one. When nil, Pricing and
+	// FeeWarnPercent below are used as they are.
+	Settings *Settings
 	// Pricing marks up what ABS charges, hides some plans and sets the
 	// electricity service fee. The zero value changes nothing.
 	Pricing Pricing
@@ -50,7 +55,23 @@ func (s *Service) SellCatalog(ctx context.Context) (abs.Catalog, error) {
 	if err != nil {
 		return abs.Catalog{}, err
 	}
-	return withinMinimumPayment(s.Pricing.Apply(catalog), s.MinPaymentKobo), nil
+	return withinMinimumPayment(s.pricing().Apply(catalog), s.MinPaymentKobo), nil
+}
+
+// pricing is the pricing rules in force right now.
+func (s *Service) pricing() Pricing {
+	if s.Settings != nil {
+		return s.Settings.Pricing()
+	}
+	return s.Pricing
+}
+
+// feeWarnPercent is the payment fee limit above which the owner is warned.
+func (s *Service) feeWarnPercent() float64 {
+	if s.Settings != nil {
+		return s.Settings.Float("payment_fee_warn_percent")
+	}
+	return s.FeeWarnPercent
 }
 
 // customerName is the name given for the customer, or the part of their email
@@ -197,13 +218,14 @@ func (s *Service) recordPaymentFee(ctx context.Context, o Order, txn payment.Pay
 		s.Log.Warn("PaymentFee - Order", "detail", fmt.Sprintf("order %s: could not save the payment fee: %v", o.ID, err))
 	}
 	// Compared in whole numbers: 170 of 10,000 is exactly 1.7%, not 1.7000000000000002.
-	if limit := percentMilli(s.FeeWarnPercent); limit > 0 && txn.ReceivedKobo > 0 {
+	warn := s.feeWarnPercent()
+	if limit := percentMilli(warn); limit > 0 && txn.ReceivedKobo > 0 {
 		if txn.FeeKobo*100_000 > txn.ReceivedKobo*limit {
 			percent := float64(txn.FeeKobo) / float64(txn.ReceivedKobo) * 100
 			s.Log.Warn("PaymentFee - Order", "detail", fmt.Sprintf(
 				"order %s: the payment provider took %.2f%% (%d kobo of %d), above the %.2f%% prices were worked out for; check the fee agreement",
-				o.ID, percent, txn.FeeKobo, txn.ReceivedKobo, s.FeeWarnPercent))
-			s.alert("fee-watch", feeWatchEvery, fmt.Sprintf("Payment fee is %.2f%%, above the %.2f%% prices were built for", percent, s.FeeWarnPercent),
+				o.ID, percent, txn.FeeKobo, txn.ReceivedKobo, warn))
+			s.alert("fee-watch", feeWatchEvery, fmt.Sprintf("Payment fee is %.2f%%, above the %.2f%% prices were built for", percent, warn),
 				fmt.Sprintf("Order %s: the payment provider took %s of a %s payment (%.2f%%).\n\nPrices assume about 1.61%%. If this is the new rate, the markups may need raising; "+
 					"check the fee in the provider's dashboard.\n", o.ID, formatNaira(txn.FeeKobo), formatNaira(txn.ReceivedKobo), percent))
 		}

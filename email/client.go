@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"Bills-Backend/logging"
@@ -45,7 +46,7 @@ type Client struct {
 	fromEmail     string
 	fromName      string
 	bounceAddress string
-	sandbox       bool
+	sandbox       atomic.Bool // can be switched while the server runs (SetSandbox)
 	http          *http.Client
 
 	// Log, if set, records one line per request to ZeptoMail. Reply bodies are
@@ -54,19 +55,23 @@ type Client struct {
 }
 
 func New(s Settings) *Client {
-	return &Client{
+	c := &Client{
 		baseURL:       strings.TrimRight(s.BaseURL, "/"),
 		token:         strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s.Token), "Zoho-enczapikey")),
 		fromEmail:     s.FromEmail,
 		fromName:      s.FromName,
 		bounceAddress: s.BounceAddress,
-		sandbox:       s.Sandbox,
 		http:          &http.Client{Timeout: 15 * time.Second},
 	}
+	c.sandbox.Store(s.Sandbox)
+	return c
 }
 
 // Sandbox reports whether messages are logged instead of sent.
-func (c *Client) Sandbox() bool { return c.sandbox }
+func (c *Client) Sandbox() bool { return c.sandbox.Load() }
+
+// SetSandbox switches between logging messages (true) and sending them (false).
+func (c *Client) SetSandbox(on bool) { c.sandbox.Store(on) }
 
 // Message is one email to one recipient. Text or HTML (or both) is required.
 type Message struct {
@@ -126,7 +131,7 @@ func (c *Client) Send(ctx context.Context, m Message) error {
 	if m.Text == "" && m.HTML == "" {
 		return fmt.Errorf("email: message has no body")
 	}
-	if c.sandbox {
+	if c.Sandbox() {
 		if c.Log != nil {
 			c.Log.Info(operationName(pathSend)+" - ZeptoMail", "detail", "sandbox, not sent")
 		}
