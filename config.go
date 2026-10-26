@@ -74,6 +74,12 @@ type Config struct {
 	// /monnify and /email endpoints. It is required whenever real money can be
 	// spent (production, or ABS_SANDBOX=false), when only /admin is served.
 	AdminToken string
+
+	// TrustProxy says a reverse proxy (Caddy, nginx) sits in front and sets
+	// X-Forwarded-For, so rate limits count each customer's address rather than
+	// the proxy's. Leave it off when the server is reached directly, because the
+	// header can then be forged.
+	TrustProxy bool
 }
 
 // MailConfigured reports whether enough is set to actually send email;
@@ -117,6 +123,7 @@ func LoadConfig() (Config, error) {
 		MailBounceAddress:   os.Getenv("MAIL_BOUNCE_ADDRESS"),
 		MailSandbox:         envOr("MAIL_SANDBOX", "true") != "false",
 		AdminToken:          os.Getenv("ADMIN_TOKEN"),
+		TrustProxy:          envOr("TRUST_PROXY", "false") == "true",
 	}
 	if c.PaymentProvider != "monnify" && c.PaymentProvider != "kora" {
 		return c, fmt.Errorf("PAYMENT_PROVIDER must be monnify or kora, got %q", c.PaymentProvider)

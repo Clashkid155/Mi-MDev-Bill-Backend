@@ -18,7 +18,7 @@ func TestRequireAdmin(t *testing.T) {
 		return rec.Code
 	}
 
-	guarded := requireAdmin("s3cret", ok)
+	guarded := requireAdmin("s3cret", nil, false, ok)
 	for name, auth := range map[string]string{"no header": "", "wrong token": "Bearer wrong", "no Bearer prefix": "s3cret"} {
 		if code := call(guarded, auth); code != 401 {
 			t.Errorf("%s: got %d, want 401", name, code)
@@ -27,7 +27,7 @@ func TestRequireAdmin(t *testing.T) {
 	if call(guarded, "Bearer s3cret") != 200 {
 		t.Error("right token rejected")
 	}
-	if call(requireAdmin("", ok), "") != 200 {
+	if call(requireAdmin("", nil, false, ok), "") != 200 {
 		t.Error("empty token should leave the routes open (sandbox only)")
 	}
 }

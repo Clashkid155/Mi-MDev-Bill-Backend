@@ -18,7 +18,6 @@ import (
 	"Bills-Backend/monnify"
 	"Bills-Backend/order"
 	"Bills-Backend/payment"
-	"Bills-Backend/reply"
 )
 
 func main() {
@@ -127,13 +126,9 @@ func serve(cfg Config, log *slog.Logger) {
 		KoraSecret:             cfg.KoraSecretKey,
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		reply.OKWithMessage(w, http.StatusOK, "ok", nil)
-	})
-	mux.Handle("/", api.Routes())
 	// Direct access to the providers, for curl and Postman. These can spend real
 	// money, so they are only served while nothing real is at stake.
+	var directRoutes http.Handler
 	if cfg.RealMoney() {
 		log.Info("Server", "detail", "direct /abs, /monnify and /email endpoints are off while real money is in use")
 	} else {
@@ -141,13 +136,19 @@ func serve(cfg Config, log *slog.Logger) {
 		if mailer != nil {
 			mailer.RegisterDirectRoutes(direct)
 		}
-		for _, prefix := range []string{"/abs/", "/monnify/", "/kora/", "/email/"} {
-			mux.Handle(prefix, requireAdmin(cfg.AdminToken, direct))
-		}
+		directRoutes = direct
 	}
-	mux.Handle("/admin/", requireAdmin(cfg.AdminToken, api.AdminRoutes()))
+	log.Info("Config", "detail", fmt.Sprintf("client addresses for rate limits come from X-Forwarded-For: %t", cfg.TrustProxy))
 
-	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: logging.Requests(log, mux), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           routes(cfg, log, api, directRoutes),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second, // the slowest call out is ABS at 30s
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

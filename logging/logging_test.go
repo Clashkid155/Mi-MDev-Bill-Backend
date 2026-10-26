@@ -57,3 +57,25 @@ func TestDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestsLogTheRouteNotTheOrderId(t *testing.T) {
+	var out bytes.Buffer
+	log := New(&out, slog.LevelInfo)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/orders/{id}", func(w http.ResponseWriter, r *http.Request) {})
+	mux.HandleFunc("/admin/", func(w http.ResponseWriter, r *http.Request) {})
+	h := Requests(log, mux)
+
+	for _, path := range []string{"/v1/orders/MDEV_secret", "/admin/anything", "/nowhere/at/all"} {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", path, nil))
+	}
+	got := out.String()
+	if strings.Contains(got, "MDEV_secret") {
+		t.Errorf("the order id was logged:\n%s", got)
+	}
+	for _, want := range []string{"GET /v1/orders/{id} -> 200", "GET /admin/ -> 200", "GET /nowhere/at/all -> 404"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

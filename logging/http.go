@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,7 @@ func Requests(log *slog.Logger, next http.Handler) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
 
-		detail := fmt.Sprintf("%s %s -> %d · %s", r.Method, r.URL.Path, rec.status, Duration(time.Since(started)))
+		detail := fmt.Sprintf("%s -> %d · %s", routeOf(r), rec.status, Duration(time.Since(started)))
 		switch {
 		case rec.status >= 500:
 			log.Error("HTTP", "detail", detail)
@@ -38,4 +39,19 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// routeOf names what was asked for. When the router matched a pattern it is
+// logged instead of the path, so "GET /v1/orders/{id}" is written rather than a
+// customer's order id (which is all that protects an order's status page).
+func routeOf(r *http.Request) string {
+	pattern := r.Pattern
+	switch {
+	case pattern == "" || pattern == "/":
+		return r.Method + " " + r.URL.Path
+	case strings.Contains(pattern, " "):
+		return pattern
+	default:
+		return r.Method + " " + pattern
+	}
 }
