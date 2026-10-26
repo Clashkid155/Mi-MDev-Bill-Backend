@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,12 @@ import (
 // in these tests reaches a payment provider or ABS.
 func testServer(t *testing.T, cfg Config, direct http.Handler) (http.Handler, *bytes.Buffer) {
 	t.Helper()
+	return testServerWith(t, cfg, direct, nil)
+}
+
+// testServerWith is testServer with the owner's alerts going to alerts.
+func testServerWith(t *testing.T, cfg Config, direct http.Handler, alerts order.Alerter) (http.Handler, *bytes.Buffer) {
+	t.Helper()
 	store, err := order.OpenStore(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +36,7 @@ func testServer(t *testing.T, cfg Config, direct http.Handler) (http.Handler, *b
 	var logs bytes.Buffer
 	log := logging.New(&logs, slog.LevelInfo)
 	vendor := abs.New("http://127.0.0.1:1", "k", true) // nothing listens there: a meter check that gets through fails fast with 502
-	api := &order.API{Service: &order.Service{Store: store, Vendor: vendor, Log: log}, KoraSecret: "sk_test"}
+	api := &order.API{Service: &order.Service{Store: store, Vendor: vendor, Log: log, Alerts: alerts}, KoraSecret: "sk_test"}
 	return routes(cfg, log, api, direct), &logs
 }
 
@@ -249,5 +256,34 @@ func TestMeterChecksCannotUseUpTheABSQuota(t *testing.T) {
 	}
 	if passed < metersTotalBurst {
 		t.Errorf("only %d got through, the shared allowance of %d was not honoured", passed, metersTotalBurst)
+	}
+}
+
+// recorder is an Alerter that remembers what it was told.
+type recorder struct {
+	mu   sync.Mutex
+	sent []string
+}
+
+func (r *recorder) Alert(key string, throttle time.Duration, subject, body string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sent = append(r.sent, subject+" | "+body)
+}
+
+func TestTheOwnerIsToldWhenSomeoneGuessesTheAdminToken(t *testing.T) {
+	alerts := &recorder{}
+	h, _ := testServerWith(t, Config{AdminToken: "s3cret"}, nil, alerts)
+	for i := 0; i < adminMaxWrongTokens+3; i++ { // more guesses after the lockout must not repeat the alert
+		do(h, "GET", "/admin/orders", fmt.Sprintf("Bearer guess%d", i), "198.51.100.9:5000")
+	}
+	alerts.mu.Lock()
+	defer alerts.mu.Unlock()
+	if len(alerts.sent) != 1 {
+		t.Fatalf("want one alert, got %d: %q", len(alerts.sent), alerts.sent)
+	}
+	if !strings.Contains(alerts.sent[0], "guessing the admin token") || !strings.Contains(alerts.sent[0], "198.51.100.9") ||
+		strings.Contains(alerts.sent[0], "guess0") || strings.Contains(alerts.sent[0], "s3cret") {
+		t.Errorf("the alert should name the address and never include a token: %q", alerts.sent[0])
 	}
 }

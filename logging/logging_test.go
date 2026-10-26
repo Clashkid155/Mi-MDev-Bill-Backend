@@ -79,3 +79,20 @@ func TestRequestsLogTheRouteNotTheOrderId(t *testing.T) {
 		}
 	}
 }
+
+func TestAForgedPathCannotMakeAFakeLogLine(t *testing.T) {
+	var out bytes.Buffer
+	log := New(&out, slog.LevelInfo)
+	h := Requests(log, http.NotFoundHandler())
+	req := httptest.NewRequest("GET", "/x%0A%5BINFO%5D%20%20%5BBackup%20-%20Store%5D%20%20saved%20bills-fake.db%0D", nil)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/"+strings.Repeat("a", 5000), nil))
+
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("two requests must make exactly two lines, got %d:\n%s", len(lines), out.String())
+	}
+	if len(lines[1]) > 300 {
+		t.Errorf("a very long path was logged in full (%d characters)", len(lines[1]))
+	}
+}

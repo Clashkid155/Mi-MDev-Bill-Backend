@@ -1,0 +1,25 @@
+# /etc/litestream.yml
+#
+# Litestream watches the database and copies every change to a Cloudflare R2
+# bucket within about a second, so a dead server loses seconds of orders, not
+# an hour. The three ${...} values come from /etc/bills/litestream.env.
+#
+# Litestream 0.5 cannot encrypt on its own, so keep this bucket private, give its
+# token access to this one bucket only, and keep the encrypted hourly copies
+# (offsite-backup.sh) as well: they are a second, independent backup.
+dbs:
+  - path: /var/lib/bills/bills.db
+    replica:
+      type: s3
+      bucket: bills-litestream
+      path: bills
+      endpoint: ${CF_ACCOUNT_ID}.r2.cloudflarestorage.com
+      region: auto
+      access-key-id: ${R2_ACCESS_KEY}
+      secret-access-key: ${R2_SECRET_KEY}
+
+# A full copy of the database once a day, and the history needed to restore to any
+# moment in the last 7 days.
+snapshot:
+  interval: 24h
+  retention: 168h

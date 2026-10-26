@@ -85,6 +85,13 @@ func (s *Service) alert(key string, throttle time.Duration, subject, body string
 	}
 }
 
+// NotifyOwner tells the owner about something that is not a purchase, such as
+// someone guessing the admin token. Like every alert it returns at once, only
+// emails when alerts are set up, and does not repeat the same key within throttle.
+func (s *Service) NotifyOwner(key string, throttle time.Duration, subject, body string) {
+	s.alert(key, throttle, subject, body)
+}
+
 const (
 	refundThrottle  = 24 * time.Hour // one alert per order
 	absEmptyEvery   = time.Hour

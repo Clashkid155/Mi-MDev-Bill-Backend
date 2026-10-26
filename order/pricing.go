@@ -55,11 +55,21 @@ type CreateRequest struct {
 	AmountKobo int64  `json:"amount_kobo"`
 }
 
-const maxCustomerName = 100
+const (
+	maxCustomerName   = 100
+	maxIdempotencyKey = 100 // a UUID is 36; anything longer would only fill the database
+	maxEmail          = 254 // the longest an email address can be
+)
 
 func (r CreateRequest) validate() error {
 	if strings.TrimSpace(r.IdempotencyKey) == "" {
 		return InvalidError{"idempotency_key is required"}
+	}
+	if len(r.IdempotencyKey) > maxIdempotencyKey {
+		return InvalidError{fmt.Sprintf("idempotency_key must be at most %d characters", maxIdempotencyKey)}
+	}
+	if len(r.Email) > maxEmail {
+		return InvalidError{"a valid email is required"}
 	}
 	if _, err := mail.ParseAddress(r.Email); err != nil {
 		return InvalidError{"a valid email is required"}

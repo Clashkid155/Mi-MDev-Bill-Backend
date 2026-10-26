@@ -1,15 +1,27 @@
-# Caddy gets and renews the HTTPS certificate by itself. Replace the name with
-# your own (its DNS A record must point at this server first).
+# /etc/caddy/Caddyfile
+#
+# Cloudflare sits in front (the orange cloud is on for this name), so Caddy uses
+# Cloudflare's free Origin Certificate rather than getting its own: create it in
+# Cloudflare under SSL/TLS, Origin Server, and save the two files named below.
+# Cloudflare's SSL/TLS mode must be "Full (strict)".
+#
+# Replace api.example.com with your own name.
 api.example.com {
 	encode gzip
+
+	tls /etc/caddy/origin.pem /etc/caddy/origin.key
 
 	# Tell browsers to only ever use HTTPS for this name.
 	header Strict-Transport-Security "max-age=31536000"
 
-	# The server only listens on 127.0.0.1, so nothing but Caddy can reach it.
-	# Caddy puts the customer's real address in X-Forwarded-For; that is what
-	# TRUST_PROXY=true makes the rate limits use.
-	reverse_proxy 127.0.0.1:8080
+	# The program listens on 127.0.0.1 only, so nothing but Caddy can reach it.
+	# Cloudflare tells Caddy who the real customer is in CF-Connecting-IP; passing
+	# that on as X-Forwarded-For is what TRUST_PROXY=true makes the rate limits use.
+	# This is only safe because the firewall (cloudflare-firewall.sh) lets nothing
+	# but Cloudflare reach this server, so nobody else can forge that header.
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+	}
 
 	request_body {
 		max_size 2MB
@@ -19,3 +31,16 @@ api.example.com {
 		output file /var/log/caddy/bills-access.log
 	}
 }
+
+# Without Cloudflare in front, use this instead: Caddy gets its own certificate by
+# itself (the name's DNS must point at the server and ports 80 and 443 must be open)
+# and the customer's address is the one Caddy sees.
+#
+# api.example.com {
+# 	encode gzip
+# 	header Strict-Transport-Security "max-age=31536000"
+# 	reverse_proxy 127.0.0.1:8080
+# 	request_body {
+# 		max_size 2MB
+# 	}
+# }

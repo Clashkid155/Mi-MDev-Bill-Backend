@@ -165,6 +165,10 @@ func ClientIP(r *http.Request, trustProxy bool) string {
 // only slows a caller down, a locked address is refused until the time is up,
 // even if its next attempt would have been right. A right attempt clears the count.
 type Lockout struct {
+	// OnLock, when set, is called (without any lock held) each time an address
+	// gets locked out, so the owner can be told someone is guessing.
+	OnLock func(key string, blockFor time.Duration)
+
 	maxFailures int
 	blockFor    time.Duration
 	now         func() time.Time
@@ -203,6 +207,13 @@ func (l *Lockout) Blocked(key string) (retryAfterSeconds int, blocked bool) {
 
 // Fail records a wrong attempt by key and locks it out once there have been too many.
 func (l *Lockout) Fail(key string) {
+	if l.fail(key) && l.OnLock != nil {
+		l.OnLock(key, l.blockFor)
+	}
+}
+
+// fail records the failure and says whether it just locked the address.
+func (l *Lockout) fail(key string) (locked bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -217,7 +228,9 @@ func (l *Lockout) Fail(key string) {
 	if e.failures >= l.maxFailures {
 		e.blockedUntil = now.Add(l.blockFor)
 		e.failures = 0 // a fresh set of attempts once the block ends
+		return true
 	}
+	return false
 }
 
 // Succeed clears key's failures: it got it right.

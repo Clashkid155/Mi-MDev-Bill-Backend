@@ -143,6 +143,33 @@ func TestBadRequestBodiesAreRefusedBeforeAnyProviderIsCalled(t *testing.T) {
 	}
 }
 
+// Without a limit, each request could store up to 1 MB in the key or the email.
+func TestOversizedKeysAndEmailsAreRefused(t *testing.T) {
+	f := newFakes(t)
+	srv := httptest.NewServer((&API{Service: f.svc}).Routes())
+	defer srv.Close()
+
+	longKey := airtimeRequest
+	longKey.IdempotencyKey = strings.Repeat("k", maxIdempotencyKey+1)
+	longEmail := airtimeRequest
+	longEmail.Email = strings.Repeat("a", 250) + "@b.co"
+	for name, req := range map[string]CreateRequest{"key": longKey, "email": longEmail} {
+		if code, body := postJSON(t, srv.URL+"/v1/orders", req); code != 400 {
+			t.Errorf("a too long %s answered %d, want 400: %s", name, code, body)
+		}
+	}
+	atLimit := airtimeRequest
+	atLimit.IdempotencyKey = strings.Repeat("k", maxIdempotencyKey)
+	if code, body := postJSON(t, srv.URL+"/v1/orders", atLimit); code != 200 {
+		t.Errorf("a key of exactly %d characters answered %d: %s", maxIdempotencyKey, code, body)
+	}
+	var stored int
+	f.svc.Store.db.QueryRow(`SELECT COUNT(*) FROM orders`).Scan(&stored)
+	if stored != 1 {
+		t.Errorf("%d orders stored; only the valid one should be", stored)
+	}
+}
+
 func TestMeterCheckOverHTTP(t *testing.T) {
 	f := newFakes(t)
 	srv := httptest.NewServer((&API{Service: f.svc}).Routes())

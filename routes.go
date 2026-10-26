@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -39,6 +40,12 @@ const (
 // is the providers' direct endpoints, or nil when real money is in use.
 func routes(cfg Config, log *slog.Logger, api *order.API, direct http.Handler) http.Handler {
 	fails := ratelimit.NewLockout(adminMaxWrongTokens, adminLockFor)
+	fails.OnLock = func(who string, blockFor time.Duration) {
+		api.NotifyOwner("admin-lockout:"+who, time.Hour, "Someone is guessing the admin token",
+			fmt.Sprintf("The address %s got the admin token wrong %d times in a row and is blocked for %d minutes.\n\n"+
+				"If that was you, nothing more is needed. If not, nobody has got in: the right token is still refused while blocked. "+
+				"If it keeps happening, change ADMIN_TOKEN.", who, adminMaxWrongTokens, int(blockFor.Minutes())))
+	}
 	guard := func(next http.Handler) http.Handler { return requireAdmin(cfg.AdminToken, fails, cfg.TrustProxy, next) }
 
 	mux := http.NewServeMux()

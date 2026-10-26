@@ -48,10 +48,29 @@ func routeOf(r *http.Request) string {
 	pattern := r.Pattern
 	switch {
 	case pattern == "" || pattern == "/":
-		return r.Method + " " + r.URL.Path
+		return r.Method + " " + printable(r.URL.Path)
 	case strings.Contains(pattern, " "):
 		return pattern
 	default:
 		return r.Method + " " + pattern
 	}
+}
+
+// printable makes a path safe to put in a log line: the path is whatever the caller
+// sent, and an encoded newline in it could otherwise forge a line of its own.
+func printable(path string) string {
+	const max = 120
+	var b strings.Builder
+	for i, r := range path {
+		if i >= max {
+			b.WriteString("...")
+			break
+		}
+		if r < 0x20 || r == 0x7f || r == '\u2028' || r == '\u2029' {
+			b.WriteByte('?')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

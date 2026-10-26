@@ -1,8 +1,9 @@
 # /etc/systemd/system/bills.service
 [Unit]
 Description=Mi MDev bills backend
-After=network-online.target
-Wants=network-online.target
+After=network-online.target litestream.service
+Wants=network-online.target litestream.service
+# Litestream starts first and stops last, so it copies the final changes made as this service shuts down.
 
 [Service]
 User=bills

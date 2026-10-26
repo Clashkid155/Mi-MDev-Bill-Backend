@@ -1,0 +1,32 @@
+# /etc/systemd/system/litestream.service
+[Unit]
+Description=Litestream, continuous backup of the bills database
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bills
+Group=bills
+# CF_ACCOUNT_ID, R2_ACCESS_KEY and R2_SECRET_KEY (chmod 600, owner root, group bills: 640).
+EnvironmentFile=/etc/bills/litestream.env
+ExecStart=/usr/local/bin/litestream replicate -config /etc/litestream.yml
+Restart=always
+RestartSec=5
+
+# It may read and write the database folder and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bills
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
