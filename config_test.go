@@ -17,6 +17,7 @@ func load(t *testing.T, env map[string]string) (Config, error) {
 		"MARKUP_9MOBILE_PERCENT", "MARKUP_DEFAULT_PERCENT", "HIDDEN_PLANS", "ELECTRICITY_FEE_PERCENT", "ELECTRICITY_FEE_MIN_NAIRA",
 		"PAYMENT_FEE_WARN_PERCENT", "ZEPTOMAIL_TOKEN", "MAIL_FROM_EMAIL", "ADMIN_ALERT_EMAIL", "ABS_LOW_BALANCE_NAIRA", "ABS_BALANCE_CHECK_MINUTES",
 		"TRUST_PROXY", "BACKUP_DIR", "BACKUP_EVERY_MINUTES", "WEBHOOK_RETENTION_DAYS",
+		"ABS_API_KEY", "ABS_WEBHOOK_SECRET", "KORA_SECRET_KEY", "MONNIFY_API_KEY", "MONNIFY_SECRET_KEY", "MONNIFY_CONTRACT_CODE",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
@@ -152,5 +153,40 @@ func TestServerSafetySettings(t *testing.T) {
 		if _, err := load(t, env); err == nil {
 			t.Errorf("%s should be refused", name)
 		}
+	}
+}
+
+func TestProductionSettings(t *testing.T) {
+	live := map[string]string{
+		"APP_ENV": "production", "ABS_SANDBOX": "false", "ADMIN_TOKEN": "t", "ABS_API_KEY": "k",
+		"PAYMENT_PROVIDER": "kora", "KORA_SECRET_KEY": "sk_live",
+	}
+	with := func(changes map[string]string) map[string]string {
+		env := map[string]string{}
+		for k, v := range live {
+			env[k] = v
+		}
+		for k, v := range changes {
+			env[k] = v
+		}
+		return env
+	}
+
+	// No ABS webhook secret is needed: nothing acts on ABS webhooks.
+	if _, err := load(t, live); err != nil {
+		t.Fatalf("a production setup without an ABS webhook secret must start: %v", err)
+	}
+	for name, env := range map[string]map[string]string{
+		"ABS in sandbox (customers would pay and get nothing)": with(map[string]string{"ABS_SANDBOX": "true"}),
+		"no ABS key":     with(map[string]string{"ABS_API_KEY": ""}),
+		"no admin token": with(map[string]string{"ADMIN_TOKEN": ""}),
+		"no Kora key":    with(map[string]string{"KORA_SECRET_KEY": ""}),
+	} {
+		if _, err := load(t, env); err == nil {
+			t.Errorf("production with %s must be refused", name)
+		}
+	}
+	if _, err := load(t, nil); err != nil {
+		t.Errorf("the sandbox defaults must still start: %v", err)
 	}
 }

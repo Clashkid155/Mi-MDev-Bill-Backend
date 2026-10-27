@@ -170,6 +170,34 @@ func TestOversizedKeysAndEmailsAreRefused(t *testing.T) {
 	}
 }
 
+// The email is stored and passed on exactly as typed, so only a plain address is accepted.
+func TestOnlyAPlainEmailAddressIsAccepted(t *testing.T) {
+	f := newFakes(t)
+	srv := httptest.NewServer((&API{Service: f.svc}).Routes())
+	defer srv.Close()
+
+	for i, email := range []string{
+		"Evil <victim@x.com>", `"a b"@x.co`, "a@b.co, c@d.co", "a@b.co;c@d.co", "<a@b.co>", "a b@c.co", "a@b.co\nBcc: x@y.co", "",
+	} {
+		req := airtimeRequest
+		req.IdempotencyKey, req.Email = fmt.Sprintf("bad-%d", i), email
+		if code, body := postJSON(t, srv.URL+"/v1/orders", req); code != 400 {
+			t.Errorf("%q answered %d, want 400: %s", email, code, body)
+		}
+	}
+	req := airtimeRequest
+	req.IdempotencyKey, req.Email = "good", "  buyer@example.com \n"
+	code, body := postJSON(t, srv.URL+"/v1/orders", req)
+	if code != 200 {
+		t.Fatalf("a plain address with stray spaces answered %d: %s", code, body)
+	}
+	var stored string
+	f.svc.Store.db.QueryRow(`SELECT customer_email FROM orders WHERE idempotency_key = 'good'`).Scan(&stored)
+	if stored != "buyer@example.com" {
+		t.Errorf("stored %q, want the trimmed address", stored)
+	}
+}
+
 func TestMeterCheckOverHTTP(t *testing.T) {
 	f := newFakes(t)
 	srv := httptest.NewServer((&API{Service: f.svc}).Routes())

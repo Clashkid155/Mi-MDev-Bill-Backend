@@ -71,7 +71,9 @@ func (r CreateRequest) validate() error {
 	if len(r.Email) > maxEmail {
 		return InvalidError{"a valid email is required"}
 	}
-	if _, err := mail.ParseAddress(r.Email); err != nil {
+	// Only a plain address: "Name <a@b.co>" and quoted forms parse too, but the
+	// string is stored and handed on exactly as typed.
+	if addr, err := mail.ParseAddress(r.Email); err != nil || addr.Address != r.Email || strings.ContainsAny(r.Email, " \t\r\n<>\",;") {
 		return InvalidError{"a valid email is required"}
 	}
 	if len([]rune(strings.TrimSpace(r.CustomerName))) > maxCustomerName {

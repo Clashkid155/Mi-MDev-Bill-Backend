@@ -39,8 +39,9 @@ In the Vultr dashboard choose **Deploy new server**, then:
 | Type | Cloud Compute, **High Performance, AMD** |
 | Location | **Johannesburg** (about 110 ms from Nigeria; Germany is about 245 ms) |
 | Plan | **1 vCPU, 1 GB RAM, 25 GB NVMe, 2 TB bandwidth, $6 a month** (plan id `vhp-1c-1gb-amd`) |
-| Image | **Ubuntu 24.04 LTS x64** |
-| SSH key | Add yours (Account, SSH Keys). Do not use a password. |
+| Image | **Ubuntu 24.04 LTS x64** (see below for the other versions on the list) |
+| SSH key | Add yours (Account, SSH Keys) and tick it. Do not use a password. |
+| Limited user login | Leave it **on** if the deploy screen offers it (the user is called `linuxuser`, with `sudo`). You log in as that user, never as `root`, which is safer. |
 | IPv4 | On (ABS and the webhooks need it) |
 | DDoS protection add-on | Off for now. Cloudflare covers it. |
 | Automatic backups | Optional. Ours cover you, so skip it unless you want one more layer. |
@@ -51,26 +52,61 @@ on the disk for every write. The cheaper alternative is Regular Performance, 1 v
 1 TB bandwidth, $5 (`vc2-1c-1gb`); it works too. Prices and plan names change, so check them on the
 deploy screen. Vultr bills by the hour up to a monthly cap, so you can delete the server if you change your mind.
 
+**Which Ubuntu.** Vultr lists several; take **24.04 LTS**. "LTS" means long term support: security fixes
+until 2029 (the dates are from Ubuntu's published schedule; check them if it matters). The commands in this guide
+are written for it. The others:
+
+* **26.04 LTS** is the newest long term release (supported to about 2031) and is a fine choice if you want the
+  longest life, but this guide has not been tried on it.
+* **22.04 LTS** loses its standard support in 2027. Skip it.
+* **26.10** is a short term release with only about nine months of fixes. Never use it for a server that takes money.
+
 Note the server's IP address.
+
+**Log in as the limited user.** With "limited user login" on, `root` cannot log in over SSH (the root password
+from the dashboard will be refused). Use the user you were given, with your key, and become root with `sudo`
+when a step needs it. In `~/.ssh/config` set `User linuxuser` for the `bills` entry, then:
+
+```bash
+ssh bills            # logs you in as linuxuser with your key, no password
+sudo -i              # a root shell, for the setup commands below (type exit to leave it)
+```
+
+**If `ssh` asks for a password instead of logging you in**, the key was not attached to the server (it must
+be ticked on the deploy screen, not only saved in your account), or you are using the wrong user name. The
+Vultr web console (View Console) always works: log in there as the limited user, put your public key in
+`~/.ssh/authorized_keys`, and try again.
 
 ## 2. Prepare the server
 
 In your Cloudflare DNS, add an `A` record: name `api`, the server's IP, **Proxy status: Proxied** (orange cloud).
 
-Log in as root and run:
+Log in (`ssh bills`), become root with `sudo -i`, and run:
 
 ```bash
 # updates, firewall, automatic security patches, brute force protection
-apt update && apt -y upgrade
-apt -y install ufw fail2ban unattended-upgrades caddy gzip curl
+# (the options keep the SSH settings Vultr made instead of stopping to ask about them)
+export DEBIAN_FRONTEND=noninteractive
+apt update && apt -y -o Dpkg::Options::=--force-confold upgrade
+apt -y -o Dpkg::Options::=--force-confold install ufw fail2ban unattended-upgrades gzip curl gnupg debian-keyring debian-archive-keyring apt-transport-https
 ufw default deny incoming && ufw default allow outgoing
 ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp   # 80 and 443 are narrowed to Cloudflare in step 6
 ufw --force enable
 
-# SSH by key only, no root password logins
-sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-systemctl reload ssh
+# Caddy from its own repository, so it gets security fixes promptly (Ubuntu's copy is older)
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+apt update && apt -y install caddy
+
+# SSH by key only, no passwords. A file in sshd_config.d is read first and the first value wins, so this
+# also beats the "PasswordAuthentication yes" that some cloud images put in their own file there.
+cat > /etc/ssh/sshd_config.d/00-bills.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+sshd -t && systemctl restart ssh
+sshd -T | grep -E '^(passwordauthentication|kbdinteractiveauthentication|permitrootlogin)'   # must say: no, no, no
 
 # the service user and its folders
 useradd --system --home /var/lib/bills --shell /usr/sbin/nologin bills
@@ -78,38 +114,35 @@ install -d -o bills -g bills -m 700 /var/lib/bills /var/backups/bills
 install -d -o root -g bills -m 750 /etc/bills /opt/bills
 ```
 
-Open a second terminal and confirm you can still log in before closing the first.
+If a screen asks about `sshd_config` anyway, choose "keep the local version currently installed": Vultr changed
+that file to set up your login, and our SSH settings live in a separate file that applies either way. If the
+upgrade says a restart is needed (`/var/run/reboot-required`), run `reboot` and log in again.
 
-## 3. ABS, and your changing home address
+Open a second terminal and confirm `ssh bills` still works before closing the first.
 
-The ABS dashboard lets you restrict the API key to certain IP addresses. Do it, with **the server's address
-only**: then a stolen key is useless from anywhere else.
+## 3. ABS and the server's address
 
-Your home and phone addresses change, so do not put them in. Instead, while developing on your laptop,
-send the program's outgoing calls through the server, so ABS always sees the server's address.
+Tested on 2026-10-27 with `abscheck`, from a laptop whose address was NOT in ABS's whitelist:
 
-On the server, once, make a login that can do nothing except carry traffic (put your public key in the
-place shown):
+* **The Direct API is not restricted by the whitelist.** Buying, the catalog, the wallet balance and meter
+  checks (everything the backend does to spend money) worked from an address that was not listed. A stolen API key
+  can therefore be used from anywhere. The protection is keeping the key secret, and the size of the wallet
+  (see below). Because of this you can develop from your laptop with no special setup, whatever its address.
+* **The Partner API is restricted.** Its calls (the order lookup, the account details) are refused unless the
+  caller's address is in the whitelist, and the key must have a website saved under API settings
+  (`https://absvendor.com/dashboard/apikeys.php`), or ABS answers `SITE_URL_REQUIRED`.
 
-```bash
-useradd --create-home --shell /usr/sbin/nologin tunnel
-install -d -o tunnel -g tunnel -m 700 /home/tunnel/.ssh
-echo 'restrict,port-forwarding ssh-ed25519 AAAA...your public key... you@laptop' > /home/tunnel/.ssh/authorized_keys
-chown tunnel:tunnel /home/tunnel/.ssh/authorized_keys && chmod 600 /home/tunnel/.ssh/authorized_keys
-```
+So in the ABS dashboard add **the server's address** to the IP whitelist and keep a website saved. Your laptop's
+address does not need to be there.
 
-On your laptop, whenever you test against live ABS:
+What protects the Direct key, since the whitelist cannot:
 
-```bash
-ssh -N -D 1080 tunnel@SERVER_IP            # leave this running
-HTTPS_PROXY=socks5://127.0.0.1:1080 go run .
-```
-
-Go's HTTP client follows `HTTPS_PROXY`, so ABS, Kora and the email service are all reached through the
-server. Calls to `localhost` (your own app) are not proxied. If ABS says the address is not allowed, check
-that the tunnel is running and the server's IP is the one in the dashboard.
-
-Kora: look for the same IP setting in its dashboard.
+* The key lives only in `/etc/bills/env` (readable by root and the `bills` user only). Never put it in the
+  repository, a chat, or a shared run configuration.
+* **Keep the ABS wallet small.** The most anyone can spend with a stolen key is what the wallet holds.
+  Top it up often, in small amounts; the low-balance alert (`ABS_LOW_BALANCE_NAIRA`) tells you when to.
+* If you ever suspect the key, replace it on that same ABS page and update `/etc/bills/env`.
+* Ask ABS whether the Direct API can be restricted by address or capped per day, as the Partner API can.
 
 ## 4. The program
 
@@ -118,26 +151,30 @@ patched one) and copy it over:
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o bills-backend .
-scp bills-backend root@api.example.com:/opt/bills/bills-backend
-scp deploy/bills.service root@api.example.com:/etc/systemd/system/bills.service
+scp bills-backend deploy/bills.service bills:/tmp/
+ssh bills 'sudo install -m 755 /tmp/bills-backend /opt/bills/bills-backend && sudo install -m 644 /tmp/bills.service /etc/systemd/system/bills.service'
+# the same two lines work for the other files that go to /etc or /opt: copy to /tmp, then sudo install
 ```
 
 Use `GOARCH=arm64` only if you chose an ARM server.
 
 ## 5. Its settings
 
+The commands from here on that touch `/etc`, `/opt` or `systemctl` need root: run them in a `sudo -i` shell on the
+server (`ssh bills`, then `sudo -i`).
+
 Create `/etc/bills/env` (owner `root`, group `bills`, mode `640`) with the settings from `.env.example`.
 These are the ones that matter for a live server:
 
 ```
 APP_ENV=production
+ABS_SANDBOX=false
 HTTP_ADDR=127.0.0.1:8080
 TRUST_PROXY=true
 DATABASE_PATH=/var/lib/bills/bills.db
 BACKUP_DIR=/var/backups/bills
 ADMIN_TOKEN=<a long random string: openssl rand -hex 32>
 ABS_API_KEY=...
-ABS_WEBHOOK_SECRET=...
 PAYMENT_PROVIDER=kora
 KORA_SECRET_KEY=...
 ZEPTOMAIL_TOKEN=...
@@ -148,8 +185,9 @@ ADMIN_ALERT_EMAIL=you@example.com
 
 Start it after the backups are set up (step 7), so Litestream is running from the first order.
 
-In production the server refuses to start if `ADMIN_TOKEN`, `ABS_API_KEY`, `ABS_WEBHOOK_SECRET` or the
-payment provider's keys are missing, so a half finished setup tells you at once.
+In production the server refuses to start if `ADMIN_TOKEN`, `ABS_API_KEY` or the payment provider's keys are
+missing, or if `ABS_SANDBOX` is not `false` (with ABS in sandbox, customers would pay and receive nothing), so a half
+finished setup tells you at once. There is no ABS webhook secret to set: nothing uses ABS webhooks.
 
 ## 6. HTTPS and Cloudflare
 
@@ -179,7 +217,7 @@ systemctl reload caddy
 addresses, closes ports 80 and 443 to everyone, and opens 443 to those addresses only):
 
 ```bash
-scp deploy/cloudflare-firewall.sh root@api.example.com:/opt/bills/ && ssh root@api.example.com /opt/bills/cloudflare-firewall.sh
+scp deploy/cloudflare-firewall.sh bills:/tmp/ && ssh bills 'sudo bash /tmp/cloudflare-firewall.sh'
 ```
 
 Try `DRY_RUN=1` first to see what it would do. Port 22 (SSH) is untouched. Run it again if Cloudflare announces
@@ -346,12 +384,41 @@ shows how to download and decrypt it; copy the result to `/var/lib/bills/bills.d
 After any restore, check the Kora dashboard for payments in the window you may have lost and settle those
 orders by hand.
 
-## 8. Updating
+## 8. Reading the logs
+
+The program writes to the system journal. On the server, or from your laptop with `ssh bills '...'`:
+
+```bash
+journalctl -u bills -f                          # live, newest at the bottom (Ctrl+C to stop)
+journalctl -u bills -n 200 --no-pager           # the last 200 lines
+journalctl -u bills --since "1 hour ago"        # a time window ("today", "2026-11-03 14:00" also work)
+journalctl -u bills -p warning --since today    # only warnings and errors
+journalctl -u bills | grep MDEV_abc123          # everything about one order, by its id
+journalctl -u litestream -n 50 --no-pager       # the continuous backup
+tail -n 50 /var/log/bills-offsite.log           # the encrypted snapshot upload
+tail -f /var/log/caddy/bills-access.log         # every request Caddy saw (JSON lines)
+```
+
+Lines look like `[WARN]  [GetSystemData - ABS]  HTTP 401 ...`: the level, then what and who, then the detail.
+`[ERROR]` lines are the ones to read first. The program's own request lines name the route
+(`GET /v1/orders/{id}`), never the order id.
+
+Make sure the journal is kept across reboots and does not fill the disk:
+
+```bash
+mkdir -p /var/log/journal /etc/systemd/journald.conf.d
+printf '[Journal]\nSystemMaxUse=1G\nMaxRetentionSec=3month\n' > /etc/systemd/journald.conf.d/bills.conf
+systemctl restart systemd-journald
+```
+
+The logs hold order ids and some customer details, so treat them as private (only root can read the journal).
+
+## 9. Updating
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o bills-backend .
-scp bills-backend root@api.example.com:/opt/bills/bills-backend.new
-ssh root@api.example.com 'mv /opt/bills/bills-backend.new /opt/bills/bills-backend && systemctl restart bills'
+scp bills-backend bills:/tmp/bills-backend.new
+ssh bills 'sudo install -m 755 /tmp/bills-backend.new /opt/bills/bills-backend && sudo systemctl restart bills'
 ```
 
 Restarting waits for purchases in progress (up to 2.5 minutes) before stopping. Litestream keeps running.
@@ -362,7 +429,8 @@ Restarting waits for purchases in progress (up to 2.5 minutes) before stopping. 
 - [ ] `/admin/orders` answers 401 without the token and 200 with it; five wrong tokens block the address
 - [ ] `/abs/catalog` answers 404 (the direct provider routes are off with real money)
 - [ ] `go run ./tools/abscheck` (with ABS_API_KEY set) says ABS still matches what the backend expects; run it monthly too
-- [ ] The server's IP is in the ABS dashboard (and Kora's, if it has the setting), and nothing else is
+- [ ] The server's IP is in the ABS whitelist and a website is saved there (the Partner lookup needs both); Kora's dashboard checked for a similar setting
+- [ ] The ABS wallet holds only what you are willing to lose (the Direct API key cannot be restricted by address)
 - [ ] The log shows `saved bills-...db`; `journalctl -u litestream` is quiet; the offsite script has run once
 - [ ] Both restore tests worked once, and you compared the numbers
 - [ ] The private age key is in two places that are not the server

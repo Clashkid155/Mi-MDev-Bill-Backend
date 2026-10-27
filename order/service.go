@@ -128,6 +128,7 @@ func customerName(given, email string) string {
 // one-time account the customer pays into. Sending the same idempotency key
 // again returns the same order.
 func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
+	r.Email = strings.TrimSpace(r.Email)
 	if err := r.validate(); err != nil {
 		return Order{}, err
 	}

@@ -226,9 +226,10 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("KORA_SECRET_KEY is required when PAYMENT_PROVIDER=kora")
 	}
 	if c.IsProduction() {
+		// ABS_WEBHOOK_SECRET is not required: nothing acts on ABS webhooks (the handler only
+		// records them), and with real money in use they are refused unless a secret is set.
 		required := map[string]string{
-			"ABS_API_KEY":        c.ABSAPIKey,
-			"ABS_WEBHOOK_SECRET": c.ABSWebhookSecret,
+			"ABS_API_KEY": c.ABSAPIKey,
 		}
 		if c.PaymentProvider == "monnify" {
 			required["MONNIFY_API_KEY"] = c.MonnifyAPIKey
@@ -240,6 +241,9 @@ func LoadConfig() (Config, error) {
 				return c, fmt.Errorf("%s is required in production", name)
 			}
 		}
+	}
+	if c.IsProduction() && c.ABSSandbox {
+		return c, fmt.Errorf("APP_ENV=production needs ABS_SANDBOX=false: with ABS in sandbox, customers would pay real money and ABS would not deliver anything")
 	}
 	if c.RealMoney() && c.AdminToken == "" {
 		return c, fmt.Errorf("ADMIN_TOKEN is required when real money can be spent (production, or ABS_SANDBOX=false)")

@@ -86,34 +86,19 @@ func main() {
 		}
 	}
 
-	// 3. The lookup used to settle an order left PROCESSING.
+	// 3. The lookup used to settle an order left PROCESSING. Only a future feature
+	// uses it, so a refusal is a note, but ABS's own reason is shown.
 	r.section("Lookup   GET /api/partner/v1/transaction.php?ident=...")
 	status, body, err = api.get(ctx, "/api/partner/v1/transaction.php?ident="+url.QueryEscape("ABSCHECK-NOT-AN-ORDER"))
-	if err != nil {
-		r.brokenLine("no answer: %v", err)
-	} else {
-		var d map[string]json.RawMessage
-		if json.Unmarshal(body, &d) != nil {
-			r.brokenLine("HTTP %d and the reply is not JSON: %s", status, shorten(body))
-		} else {
-			r.ok("HTTP %d, JSON reply with fields: %s (an unknown order id is expected to be refused)", status, strings.Join(sortedKeys(d), ", "))
-			if _, ok := d["Status"]; !ok {
-				r.info("no \"Status\" field for an unknown order; our reader expects one for a real order (successful, Processing, failed, Refund)")
-			}
-		}
-	}
+	partnerReply(r, "the order lookup", status, body, err)
 
-	// 4. New in ABS's docs: the partner account endpoint (daily cap, IP and PIN controls).
+	// 4. The partner account endpoint (daily cap, IP and PIN controls); not used by us yet.
 	r.section("Partner account  GET /api/partner/v1/user.php (not used by us yet)")
 	status, body, err = api.get(ctx, "/api/partner/v1/user.php")
-	if err != nil {
-		r.info("no answer: %v", err)
-	} else {
+	partnerReply(r, "the partner account", status, body, err)
+	if status == http.StatusOK {
 		var d map[string]json.RawMessage
-		if json.Unmarshal(body, &d) != nil {
-			r.info("HTTP %d, not JSON: %s", status, shorten(body))
-		} else {
-			r.info("HTTP %d, fields: %s", status, strings.Join(sortedKeys(d), ", "))
+		if json.Unmarshal(body, &d) == nil {
 			for _, f := range []string{"api_daily_cap", "api_daily_spent", "currency"} {
 				if v, ok := d[f]; ok {
 					r.info("%s = %s", f, string(v))
@@ -178,6 +163,40 @@ func (c *caller) get(ctx context.Context, path string) (int, []byte, error) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	return resp.StatusCode, body, err
+}
+
+// partnerReply reports an answer from the Partner API, which this backend barely
+// uses. A refusal is only a note, but ABS's own words are shown because they say
+// why (a key without Partner access, or an address that is not allowed).
+func partnerReply(r *report, what string, status int, body []byte, err error) {
+	if err != nil {
+		r.info("%s: no answer: %v", what, err)
+		return
+	}
+	var d map[string]json.RawMessage
+	if json.Unmarshal(body, &d) != nil {
+		r.info("%s: HTTP %d, not JSON: %s", what, status, shorten(body))
+		return
+	}
+	if status == http.StatusOK {
+		r.ok("%s: HTTP 200, fields: %s", what, strings.Join(sortedKeys(d), ", "))
+		return
+	}
+	r.info("%s: HTTP %d, refused. ABS says: %s", what, status, errorDetail(d))
+}
+
+// errorDetail is ABS's own code and message from a refusal.
+func errorDetail(d map[string]json.RawMessage) string {
+	var parts []string
+	for _, f := range []string{"code", "message", "text", "error"} {
+		if v, ok := d[f]; ok {
+			parts = append(parts, f+"="+strings.TrimSpace(string(v)))
+		}
+	}
+	if len(parts) == 0 {
+		return "(no message; fields: " + strings.Join(sortedKeys(d), ", ") + ")"
+	}
+	return strings.Join(parts, " ")
 }
 
 // ---- what the catalog must look like ----

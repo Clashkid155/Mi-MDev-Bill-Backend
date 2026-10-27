@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -52,5 +53,17 @@ func TestChangesThatWouldBreakTheBackendAreCaught(t *testing.T) {
 	}
 	if r := run(t, "<html>maintenance</html>"); r.broken == 0 {
 		t.Error("a reply that is not JSON was not noticed")
+	}
+}
+
+func TestARefusedPartnerCallShowsABSsOwnWords(t *testing.T) {
+	r := &report{}
+	partnerReply(r, "the order lookup", 403, []byte(`{"Status":"failed","code":403,"message":"IP not whitelisted"}`), nil)
+	if r.broken != 0 || r.notes != 1 {
+		t.Errorf("a refused partner call is only a note: broken %d, notes %d", r.broken, r.notes)
+	}
+	d := map[string]json.RawMessage{"code": json.RawMessage(`403`), "message": json.RawMessage(`"IP not whitelisted"`)}
+	if got := errorDetail(d); !strings.Contains(got, "IP not whitelisted") || !strings.Contains(got, "code=403") {
+		t.Errorf("the reason was lost: %q", got)
 	}
 }
