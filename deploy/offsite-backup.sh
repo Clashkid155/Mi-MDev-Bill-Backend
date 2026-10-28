@@ -25,6 +25,8 @@ fail() {
 	exit 1
 }
 
+# The snapshot names are our own (bills-<time>.db), so parsing ls is safe here.
+# shellcheck disable=SC2012
 latest=$(ls -1 "$DIR"/bills-*.db 2>/dev/null | sort | tail -n 1 || true)
 [ -n "$latest" ] || fail "no snapshot in $DIR"
 # A snapshot older than 3 hours means the server stopped making them.

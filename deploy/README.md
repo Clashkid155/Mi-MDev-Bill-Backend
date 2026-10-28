@@ -146,17 +146,26 @@ What protects the Direct key, since the whitelist cannot:
 
 ## 4. The program
 
-Build it on your own computer (the Go version is pinned in `go.mod`, so everyone builds with the
-patched one) and copy it over:
+The first time, put the service file on the server (the program itself is installed by the deploy script, below):
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o bills-backend .
-scp bills-backend deploy/bills.service bills:/tmp/
-ssh bills 'sudo install -m 755 /tmp/bills-backend /opt/bills/bills-backend && sudo install -m 644 /tmp/bills.service /etc/systemd/system/bills.service'
-# the same two lines work for the other files that go to /etc or /opt: copy to /tmp, then sudo install
+scp deploy/bills.service bills:/tmp/ && ssh bills 'sudo install -m 644 /tmp/bills.service /etc/systemd/system/bills.service && sudo systemctl daemon-reload'
 ```
 
-Use `GOARCH=arm64` only if you chose an ARM server.
+Then, from your laptop, in the project folder:
+
+```bash
+deploy/deploy.sh
+```
+
+It checks the code (vet, every test, known vulnerabilities), builds the program with the Go version pinned in
+`go.mod`, copies it to the server, checks the copy is identical, swaps it in (keeping the old one as
+`bills-backend.prev`), restarts the service and checks the server answers, putting the old version back if it
+does not. **Every change you make to the code reaches the server this way**, so run it after each change you
+want live. It never touches your settings (`/etc/bills/env`) or the database. Use `DRY_RUN=1 deploy/deploy.sh` to
+see it build without touching the server.
+
+Use `TARGET_ARCH=arm64` only if you chose an ARM server.
 
 ## 5. Its settings
 
@@ -202,10 +211,16 @@ mkdir -p /var/log/caddy && chown caddy: /var/log/caddy
 systemctl reload caddy
 ```
 
+If the reload fails with "permission denied" on `/var/log/caddy/bills-access.log`, a check you ran as root
+created that file owned by root. Delete it (`rm /var/log/caddy/bills-access.log`) and reload again, and check
+configs as the Caddy user from now on: `sudo -u caddy caddy validate --config /etc/caddy/Caddyfile`.
+
 **Cloudflare settings** for the `api` name:
 
 * SSL/TLS mode: **Full (strict)**.
-* **Bot Fight Mode: off.** The Flutter app is not a browser, and Cloudflare can mistake it, and the Kora and
+* **Bot Fight Mode: off.** (In the current dashboard it is under Security, Settings, "Bot traffic"; if you cannot
+  find it, test instead: request your API with `curl` and a Python user agent, and if Cloudflare answers with a
+  challenge page or a `cf-mitigated` header rather than your server's answer, it is on.) The Flutter app is not a browser, and Cloudflare can mistake it, and the Kora and
   ABS webhooks, for bots and block them. The free plan cannot skip Bot Fight Mode for chosen paths, so keep it off.
 * Do not turn on "I'm Under Attack" mode except in a real emergency: it blocks the app and the webhooks too.
 * Leave DDoS protection and the free managed firewall rules on (they are on by default).
@@ -265,18 +280,30 @@ your password manager and one more safe place. Without it those backups cannot b
 age-keygen -o bills-age.txt     # prints the public key: age1...
 ```
 
-**C. Litestream** (on the server):
+**C. The tools.** Caddy, Litestream, rclone and age are built on your laptop from their released source, with
+the newest Go and the newest versions of the libraries they use, and scanned for known vulnerabilities. This
+matters: the downloads and packages are built weeks earlier with older libraries, and when this was set up
+the packaged Caddy and Litestream carried 16 and 26 known flaws, while these builds carry none (one
+unfixable "unmaintained library" notice, which every build has).
 
 ```bash
-cd /tmp
-curl -fsSLO https://github.com/benbjohnson/litestream/releases/download/v0.5.17/litestream-0.5.17-linux-x86_64.tar.gz
-curl -fsSLO https://github.com/benbjohnson/litestream/releases/download/v0.5.17/checksums.txt
-grep 'linux-x86_64.tar.gz$' checksums.txt | sha256sum -c -          # must say: OK
-tar -xzf litestream-0.5.17-linux-x86_64.tar.gz litestream && install -m 755 litestream /usr/local/bin/litestream
+deploy/build-tools.sh
 ```
 
-Use `litestream-0.5.17-linux-arm64.tar.gz` on an ARM server. Then copy `deploy/litestream.yml` to
-`/etc/litestream.yml`, `deploy/litestream.service` to `/etc/systemd/system/litestream.service`, and:
+Then put the Litestream files on the server:
+
+```bash
+scp deploy/litestream.yml deploy/litestream.service deploy/offsite-backup.sh bills:/tmp/
+ssh bills 'sudo install -m 644 /tmp/litestream.yml /etc/litestream.yml && sudo install -m 644 /tmp/litestream.service /etc/systemd/system/litestream.service && sudo install -m 755 /tmp/offsite-backup.sh /opt/bills/offsite-backup.sh && sudo systemctl daemon-reload'
+```
+
+and install the tools (this also removes Ubuntu's older `age` and `rclone`, so there is one of each):
+
+```bash
+deploy/install-tools.sh
+```
+
+On the server, create Litestream's settings and start it:
 
 ```bash
 cat > /etc/bills/litestream.env <<'EOF'
@@ -285,25 +312,48 @@ R2_ACCESS_KEY=access key id of the bills-litestream token
 R2_SECRET_KEY=secret of the bills-litestream token
 EOF
 chown root:bills /etc/bills/litestream.env && chmod 640 /etc/bills/litestream.env
-systemctl daemon-reload
 systemctl enable --now litestream
 journalctl -u litestream -f         # should settle with no errors; files appear in the bucket
 ```
 
+Check the secret is exactly 64 characters with no extra letter at the end; a stray character makes R2 refuse it.
+
 **D. Encrypted snapshots** (on the server):
 
 ```bash
-apt -y install age rclone
-install -m 755 offsite-backup.sh /opt/bills/offsite-backup.sh
-rclone config                    # new remote named "r2", type s3, provider Cloudflare, paste the bills-backups keys
+mkdir -p /root/.config/rclone
+nano /root/.config/rclone/rclone.conf   # paste the block below, with the bills-backups keys
+chmod 600 /root/.config/rclone/rclone.conf
+```
+
+```
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = access key id of the bills-backups token
+secret_access_key = secret of the bills-backups token
+region = auto
+endpoint = https://your cloudflare account id.r2.cloudflarestorage.com
+acl = private
+no_check_bucket = true
+```
+
+(`no_check_bucket` is needed because the token covers one bucket only.) Then the settings and the hourly job:
+
+```bash
 cat > /etc/bills/offsite.env <<'EOF'
 AGE_RECIPIENT=age1...your public key...
 RCLONE_REMOTE=r2:bills-backups
 HEALTHCHECK_URL=https://hc-ping.com/your-uuid
 EOF
 chmod 600 /etc/bills/offsite.env
-echo '17 * * * * root set -a; . /etc/bills/offsite.env; set +a; /opt/bills/offsite-backup.sh >> /var/log/bills-offsite.log 2>&1' > /etc/cron.d/bills-offsite
+printf '%s\n' 'PATH=/usr/local/bin:/usr/bin:/bin' \
+  "17 * * * * root set -a; . /etc/bills/offsite.env; set +a; /opt/bills/offsite-backup.sh >> /var/log/bills-offsite.log 2>&1" \
+  > /etc/cron.d/bills-offsite
 ```
+
+The `PATH` line matters: cron's own default leaves out `/usr/local/bin`, where the tools live. Test it once by hand
+(`set -a; . /etc/bills/offsite.env; set +a; /opt/bills/offsite-backup.sh`) and check a file appears in the bucket.
 
 **E. The alarm.** Make a free check at healthchecks.io set to "every hour, grace 2 hours" and paste its ping
 URL into `offsite.env`. If the script ever stops succeeding it emails you, which is how you learn the backups
@@ -413,15 +463,42 @@ systemctl restart systemd-journald
 
 The logs hold order ids and some customer details, so treat them as private (only root can read the journal).
 
-## 9. Updating
+## 9. Deploying changes and keeping everything up to date
+
+**Every code change:** commit it if you like, then run `deploy/deploy.sh` (step 4). Changing a setting in
+`/etc/bills/env` needs `sudo systemctl restart bills` on the server; many pricing, alert and mail settings can
+instead be changed live through the admin API (`PUT /admin/settings/{key}`) with no restart.
+
+**Everything else goes stale, and stale means known security holes.** The rule here is: keep every program and
+library on its newest release unless there is a written reason not to. The routine:
+
+| What | How it stays current |
+|---|---|
+| Ubuntu and its packages | `unattended-upgrades` installs security updates by itself. A kernel update needs a `sudo reboot` now and then; `deploy/audit.sh` says when. |
+| Our Go libraries | `go get -u ./... && go mod tidy`, run the tests, then `deploy/deploy.sh` |
+| The Go version | change the `toolchain` line in `go.mod` to the newest patch release; rebuild everything |
+| Caddy, Litestream, rclone, age | raise the version at the top of `deploy/build-tools.sh`, run it, then `deploy/install-tools.sh` |
+
+Once a month, and whenever there is security news, run:
 
 ```bash
-GOOS=linux GOARCH=amd64 go build -o bills-backend .
-scp bills-backend bills:/tmp/bills-backend.new
-ssh bills 'sudo install -m 755 /tmp/bills-backend.new /opt/bills/bills-backend && sudo systemctl restart bills'
+deploy/audit.sh
 ```
 
-Restarting waits for purchases in progress (up to 2.5 minutes) before stopping. Litestream keeps running.
+It lists newer library and tool versions, scans our code for known vulnerabilities, shows the server's pending
+updates, whether a restart is needed, whether every service is healthy, the backup freshness, whether the tools
+on the server are exactly the ones built here, and what the live site answers to the usual attacks
+(`deploy/probe.sh`, which you can also run alone). **It makes three wrong admin requests, which counts toward
+the admin lockout (5 in a row); a restart of the service clears it.**
+
+### Testing the scripts themselves
+
+`deploy/deploy.sh` and `deploy/install-tools.sh` swap programs on a live server, so their failure handling matters
+more than their happy path. `deploy/tests/run.sh` runs both against a fake server (a folder, with stand-ins for
+`ssh`, `scp`, `systemctl`, `curl` and the rest) and simulates the bad days: a corrupted copy, a program or Caddy
+that does not come back, Caddy rejecting its config, Litestream logging errors, a tampered build, a first install.
+Run it after changing either script. It proves the logic (what is kept, rolled back and reported), not that real
+systemd or Caddy behave; the live runs showed that. `shellcheck deploy/*.sh` is also clean.
 
 ## Checklist before real customers
 
@@ -438,3 +515,4 @@ Restarting waits for purchases in progress (up to 2.5 minutes) before stopping. 
 - [ ] Cloudflare: Full (strict), Bot Fight Mode off, DDoS notification emails on
 - [ ] An uptime monitor emails you if `/healthz` stops answering
 - [ ] `ssh` with a password is refused
+- [ ] `deploy/audit.sh` shows nothing to update and no unexpected answers from the live site

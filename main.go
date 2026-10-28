@@ -21,6 +21,9 @@ import (
 	"Bills-Backend/payment"
 )
 
+// version is the commit this program was built from; deploy/deploy.sh sets it.
+var version = "dev"
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "verify-backup" {
 		os.Exit(verifyBackup(os.Args[2:], os.Stdout, os.Stderr))
@@ -193,7 +196,7 @@ func serve(cfg Config, log *slog.Logger) {
 	}
 
 	go func() {
-		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox))
+		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t · version %s", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox, version))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("Server", "detail", err.Error())
 			stop()

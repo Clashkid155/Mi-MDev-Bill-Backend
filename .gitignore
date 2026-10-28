@@ -4,3 +4,5 @@ bin/
 *.db
 *.db-wal
 *.db-shm
+build/
+.DS_Store
