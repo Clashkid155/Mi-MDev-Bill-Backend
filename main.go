@@ -67,6 +67,11 @@ func serve(cfg Config, log *slog.Logger) {
 	}
 	defer store.Close()
 
+	// Events: what happened to orders and the server's warnings and errors, kept for the admin app.
+	// Written in the background, so recording one never slows an order down.
+	events := order.NewEventRecorder(store, log)
+	logging.SetSink(log, events.Capture)
+
 	// The settings the owner can change from the admin API: .env gives the starting
 	// values and anything changed through the API (saved in the database) wins.
 	settings, err := order.NewSettings(context.Background(), store, cfg.SettingDefaults(), log)
@@ -145,6 +150,7 @@ func serve(cfg Config, log *slog.Logger) {
 			Settings:       settings,
 			Pricing:        cfg.Pricing(),
 			Alerts:         alerts,
+			Events:         events,
 			FeeWarnPercent: cfg.PaymentFeeWarnPercent,
 		},
 		MonnifySecret:          cfg.MonnifySecretKey,
@@ -152,6 +158,7 @@ func serve(cfg Config, log *slog.Logger) {
 		ABSWebhookSecret:       cfg.ABSWebhookSecret,
 		RequireSignatures:      cfg.RealMoney(),
 		WebhookRetention:       time.Duration(cfg.WebhookRetentionDays) * 24 * time.Hour,
+		EventRetention:         time.Duration(cfg.EventRetentionDays) * 24 * time.Hour,
 		KoraSecret:             cfg.KoraSecretKey,
 	}
 
@@ -197,6 +204,7 @@ func serve(cfg Config, log *slog.Logger) {
 
 	go func() {
 		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t · version %s", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox, version))
+		events.Record(order.LevelInfo, "server.started", "", fmt.Sprintf("started: version %s, %s", version, cfg.Env), nil)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("Server", "detail", err.Error())
 			stop()
@@ -211,4 +219,6 @@ func serve(cfg Config, log *slog.Logger) {
 	if emailAlerts != nil {
 		emailAlerts.Wait() // and alerts being sent
 	}
+	events.Record(order.LevelInfo, "server.stopped", "", "stopped cleanly", nil)
+	events.Close() // write what is queued, before the database closes
 }

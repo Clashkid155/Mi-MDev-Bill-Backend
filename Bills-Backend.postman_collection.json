@@ -80,6 +80,10 @@
 		{
 			"key": "billsReference",
 			"value": ""
+		},
+		{
+			"key": "newAdminToken",
+			"value": ""
 		}
 	],
 	"item": [
@@ -1073,7 +1077,7 @@
 								"catalog"
 							]
 						},
-						"description": "Prices here are what customers pay: ABS's price marked up per network (MTN 2.5%, 2.2% from \u20a620,000; Airtel 4%; Glo 5%), rounded up to \u20a65. Plans ABS runs as promotions (names with HOT DEAL, CHEAP OFFER or BEST DEAL) are in their own \"Deals\" category, first in each network. A few plans are hidden on purpose. The reply also has electricity_fee {min_kobo, percent}: the service fee on electricity is the greater of the two, rounded up to whole naira, so the app can show the total before ordering. The vendor cost is never in this reply."
+						"description": "Prices here are what customers pay: ABS's price marked up per network (MTN 2.5%, 2.2% from ₦20,000; Airtel 4%; Glo 5%), rounded up to ₦5. Plans ABS runs as promotions (names with HOT DEAL, CHEAP OFFER or BEST DEAL) are in their own \"Deals\" category, first in each network. A few plans are hidden on purpose. The reply also has electricity_fee {min_kobo, percent}: the service fee on electricity is the greater of the two, rounded up to whole naira, so the app can show the total before ordering. The vendor cost is never in this reply."
 					}
 				},
 				{
@@ -1500,6 +1504,239 @@
 							}
 						},
 						"description": "Only works unsigned when ABS_WEBHOOK_SECRET is empty. Events are just logged for now."
+					}
+				}
+			]
+		},
+		{
+			"name": "Admin tokens, audit and events",
+			"item": [
+				{
+					"name": "Who am I (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/whoami",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"whoami"
+							]
+						},
+						"description": "The name and role of the token being used: \"owner\" for ADMIN_TOKEN, otherwise the name the token was given, with its role (admin or viewer). A dashboard can call this after sign in."
+					}
+				},
+				{
+					"name": "List tokens (owner)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/tokens",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"tokens"
+							]
+						},
+						"description": "Every named token, working ones first: id, name, role, the last 4 characters (hint), who made it, when it was last used and from where, and when it was revoked (0 while it works). Never the token itself. Owner only (403 for any other token)."
+					}
+				},
+				{
+					"name": "Make a token (owner)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/tokens",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"tokens"
+							]
+						},
+						"description": "Makes a named token, one per person or device. role is \"admin\" (reads and changes everything except tokens) or \"viewer\" (reads only; every change is refused with 403, and it cannot read the audit log). The token is in the answer ONCE and is stored only as a hash, so copy it now. The test script saves it as the variable newAdminToken. Names: 1 to 40 letters, digits, spaces, dots, dashes, underscores; \"owner\" and \"open\" are reserved; a working token with the same name gives 409. The owner is emailed when a token is made.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"dizz phone\",\n  \"role\": \"admin\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.token) { pm.collectionVariables.set(\"newAdminToken\", r.data.token); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Revoke a token (owner)",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/tokens/1",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"tokens",
+								"1"
+							]
+						},
+						"description": "Stops a token working at once and for good (the row stays so the audit log can still name it). 404 if the id does not exist or is already revoked. The owner is emailed."
+					}
+				},
+				{
+					"name": "Who am I, with the new token",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/whoami",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"whoami"
+							]
+						},
+						"description": "Tries the token saved by \"Make a token\".",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{newAdminToken}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Audit log (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/audit?limit=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"audit"
+							],
+							"query": [
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						},
+						"description": "What admins changed, newest first: who (token name), their role, the address, the route (for example POST /admin/orders/{id}/refunded), the real path, the status, and the request body with anything secret removed. Reads are not logged; every change is, including a viewer being refused and an address being locked out for guessing the token. Optional: actor=<token name>, before_id=<id of the last entry you have> to page back, limit 1 to 200. Owner and admin tokens only."
+					}
+				},
+				{
+					"name": "Events (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/events?level=warn&limit=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"events"
+							],
+							"query": [
+								{
+									"key": "level",
+									"value": "warn"
+								},
+								{
+									"key": "limit",
+									"value": "50"
+								}
+							]
+						},
+						"description": "What happened, newest first: orders created, paid, delivered, failed, expired and refunded (kinds order.created, order.paid, order.delivered, order.failed, order.pending, order.expired, payment.late, payment.wrong_amount, payment.unknown, refund.sent), the server starting and stopping (server.started shows the version deployed), and the server's warnings and errors (kind system). Customers' phone numbers, emails, meter numbers and tokens are removed. Filters: level = the lowest to show (info for everything, warn for warnings and errors, error), kind = an exact kind or a family ending in a dot such as order., order = an order id, since = a day (2026-10-28) or an RFC 3339 time, before_id to page back, limit 1 to 200. Each event has id, at, level, kind, order_id, message and detail (small figures such as amounts). Owner and admin tokens only."
+					}
+				},
+				{
+					"name": "Events for one order (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/events?order={{orderId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"events"
+							],
+							"query": [
+								{
+									"key": "order",
+									"value": "{{orderId}}"
+								}
+							]
+						},
+						"description": "Everything that happened to one order, newest first."
+					}
+				},
+				{
+					"name": "Events summary (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/events/summary?hours=24",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"events",
+								"summary"
+							],
+							"query": [
+								{
+									"key": "hours",
+									"value": "24"
+								}
+							]
+						},
+						"description": "Counts of info, warning and error events in the last hours (1 to 720, default 24) and the latest error: for a badge such as \"2 errors today\" that opens the list. Owner and admin tokens only."
 					}
 				}
 			]

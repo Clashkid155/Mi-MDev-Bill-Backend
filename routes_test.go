@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -285,5 +286,68 @@ func TestTheOwnerIsToldWhenSomeoneGuessesTheAdminToken(t *testing.T) {
 	if !strings.Contains(alerts.sent[0], "guessing the admin token") || !strings.Contains(alerts.sent[0], "198.51.100.9") ||
 		strings.Contains(alerts.sent[0], "guess0") || strings.Contains(alerts.sent[0], "s3cret") {
 		t.Errorf("the alert should name the address and never include a token: %q", alerts.sent[0])
+	}
+}
+
+// bearer makes a request with the given token and returns the status and the body.
+func bearer(h http.Handler, method, path, token, remote, body string) (int, string) {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.RemoteAddr = remote
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code, rec.Body.String()
+}
+
+func TestNamedTokensWorkThroughTheRealRoutes(t *testing.T) {
+	h, logs := testServer(t, Config{AdminToken: "owner-secret"}, nil)
+	code, body := bearer(h, "POST", "/admin/tokens", "owner-secret", "192.0.2.1:1", `{"name":"dashboard","role":"viewer"}`)
+	var made struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &made); err != nil || code != 200 || made.Data.Token == "" {
+		t.Fatalf("making a token: %d %s", code, body)
+	}
+	viewer := made.Data.Token
+
+	if code, _ := bearer(h, "GET", "/admin/orders", viewer, "192.0.2.2:1", ""); code != 200 {
+		t.Errorf("a viewer reading orders: %d", code)
+	}
+	if code, _ := bearer(h, "POST", "/admin/orders/MDEV_9616f67242edcfc1f3a20872b77b29ba/refunded", viewer, "192.0.2.2:1", `{}`); code != 403 {
+		t.Errorf("a viewer marking a refund: %d, want 403", code)
+	}
+	if code, _ := bearer(h, "GET", "/admin/tokens", viewer, "192.0.2.2:1", ""); code != 403 {
+		t.Errorf("a viewer listing tokens: %d, want 403", code)
+	}
+
+	// The owner's changes are still named by route in the access log, never by order id.
+	bearer(h, "POST", "/admin/orders/MDEV_9616f67242edcfc1f3a20872b77b29ba/refunded", "owner-secret", "192.0.2.3:1", `{}`)
+	if strings.Contains(logs.String(), "9616f67242edcfc1f3a20872b77b29ba") {
+		t.Errorf("an order id reached the access log:\n%s", logs.String())
+	}
+	if !strings.Contains(logs.String(), "POST /admin/orders/{id}/refunded") {
+		t.Errorf("the access log should still name the route:\n%s", logs.String())
+	}
+
+	// And the token is gone the moment it is revoked.
+	if code, _ := bearer(h, "DELETE", "/admin/tokens/1", "owner-secret", "192.0.2.3:1", ""); code != 200 {
+		t.Fatalf("revoking: %d", code)
+	}
+	if code, _ := bearer(h, "GET", "/admin/orders", viewer, "192.0.2.4:1", ""); code != 401 {
+		t.Errorf("a revoked token: %d, want 401", code)
+	}
+}
+
+func TestALockoutIsInTheAuditLog(t *testing.T) {
+	h, _ := testServer(t, Config{AdminToken: "owner-secret"}, nil)
+	attacker := "198.51.100.77:1"
+	for i := 0; i < adminMaxWrongTokens; i++ {
+		bearer(h, "GET", "/admin/orders", fmt.Sprintf("wrong%d", i), attacker, "")
+	}
+	_, body := bearer(h, "GET", "/admin/audit", "owner-secret", "192.0.2.9:1", "")
+	if !strings.Contains(body, "admin lockout") || !strings.Contains(body, "198.51.100.77") || strings.Contains(body, "wrong0") {
+		t.Errorf("the lockout should be in the audit log with the address and no guessed token: %s", body)
 	}
 }

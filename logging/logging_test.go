@@ -96,3 +96,28 @@ func TestAForgedPathCannotMakeAFakeLogLine(t *testing.T) {
 		t.Errorf("a very long path was logged in full (%d characters)", len(lines[1]))
 	}
 }
+
+func TestSinkReceivesWarningsAndErrorsOnlyIncludingFromDerivedLoggers(t *testing.T) {
+	var out bytes.Buffer
+	log := New(&out, slog.LevelInfo)
+	var got []Entry
+	if !SetSink(log, func(e Entry) { got = append(got, e) }) {
+		t.Fatal("SetSink should work on a logger made by New")
+	}
+	derived := log.With("extra", "x") // a copy: it must reach the same sink
+
+	log.Info("Tag A", "detail", "routine")
+	log.Warn("Tag B", "detail", "careful  now")
+	derived.Error("Tag C", "detail", "broke")
+
+	if len(got) != 2 || got[0].Level != slog.LevelWarn || got[0].Tag != "Tag B" || got[0].Detail != "careful now" ||
+		got[1].Level != slog.LevelError || got[1].Tag != "Tag C" {
+		t.Fatalf("sink got %+v", got)
+	}
+	if !strings.Contains(out.String(), "routine") || !strings.Contains(out.String(), "broke") {
+		t.Errorf("printing must carry on as before: %q", out.String())
+	}
+	if SetSink(slog.New(slog.NewTextHandler(&out, nil)), func(Entry) {}) {
+		t.Error("SetSink on a foreign logger must say false")
+	}
+}

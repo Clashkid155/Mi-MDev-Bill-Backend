@@ -29,6 +29,9 @@ type Service struct {
 	// order's outcome is unknown, the ABS wallet is empty, the payment fee is too
 	// high. Nil sends nothing (the log still records it).
 	Alerts Alerter
+	// Events records what happens to orders (created, paid, delivered, failed, expired, refunded)
+	// and what the server logs as warnings and errors, for the admin app. Nil records nothing.
+	Events *EventRecorder
 	// MinPaymentKobo is the smallest payment the payment provider accepts
 	// (Kora: 10000, i.e. ₦100). Airtime below it cannot be ordered and data
 	// plans priced below it are refused and hidden from the catalog. 0 means no
@@ -138,7 +141,9 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 	// payment provider for a second account.
 	defer s.creating.lock(r.IdempotencyKey)()
 	o, err := s.Store.ByIdempotencyKey(ctx, r.IdempotencyKey)
+	fresh := false
 	if errors.Is(err, ErrNotFound) {
+		fresh = true
 		var p product
 		if p, err = s.resolve(ctx, r); err != nil {
 			return Order{}, err
@@ -183,6 +188,10 @@ func (s *Service) Create(ctx context.Context, r CreateRequest) (Order, error) {
 	if err := s.Store.AttachInvoice(ctx, &o); err != nil {
 		return Order{}, err
 	}
+	if fresh {
+		s.event(LevelInfo, "order.created", o.ID, "created: "+describe(o), map[string]any{
+			"kind": o.Kind, "amount_kobo": o.AmountKobo, "fee_kobo": o.FeeKobo, "total_kobo": o.Due()})
+	}
 	return o, nil
 }
 
@@ -202,6 +211,7 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 	o, err := s.orderFor(ctx, paymentRef, txnRef)
 	if errors.Is(err, ErrNotFound) {
 		s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("payment received for unknown order (reference %q, transaction %q)", paymentRef, txnRef))
+		s.event(LevelWarn, "payment.unknown", "", fmt.Sprintf("a payment arrived for an order we do not know (reference %s)", paymentRef), nil)
 		return nil, nil
 	}
 	if err != nil {
@@ -233,6 +243,9 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 			if _, err := s.Store.Move(ctx, o.ID, o.Status, to); err != nil {
 				return nil, err
 			}
+			s.event(LevelWarn, "payment.wrong_amount", o.ID,
+				fmt.Sprintf("%s: received %s, expected %s; nothing was bought", strings.ToLower(string(to)), formatNaira(txn.ReceivedKobo), formatNaira(o.Due())),
+				map[string]any{"received_kobo": txn.ReceivedKobo, "expected_kobo": o.Due()})
 		}
 		return nil, nil
 	}
@@ -241,6 +254,8 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 			return nil, err
 		}
 		s.Log.Warn("ConfirmPayment - Order", "detail", fmt.Sprintf("order %s: %d kobo arrived after it expired, refund needed", o.ID, txn.ReceivedKobo))
+		s.event(LevelWarn, "payment.late", o.ID, fmt.Sprintf("%s arrived after the order expired; refund needed", formatNaira(txn.ReceivedKobo)),
+			map[string]any{"received_kobo": txn.ReceivedKobo})
 		s.alertRefundDue(o, "the payment arrived after the order had expired, so nothing was bought")
 		return nil, nil
 	}
@@ -250,6 +265,8 @@ func (s *Service) ConfirmPayment(ctx context.Context, paymentRef, txnRef string)
 	}
 	o.Status = StatusPaid
 	s.recordPaymentFee(ctx, o, txn)
+	s.event(LevelInfo, "order.paid", o.ID, fmt.Sprintf("paid %s (%s)", formatNaira(txn.ReceivedKobo), describe(o)),
+		map[string]any{"received_kobo": txn.ReceivedKobo, "payment_fee_kobo": txn.FeeKobo})
 	return &o, nil
 }
 
@@ -320,6 +337,7 @@ func (s *Service) Settle(ctx context.Context, o Order) (*Order, error) {
 		}
 		if moved {
 			s.Log.Info("Expire - Order", "detail", fmt.Sprintf("order %s: not paid by %s, expired", o.ID, o.ExpiresAt.Format("15:04:05")))
+			s.event(LevelInfo, "order.expired", o.ID, "not paid in time, expired: "+describe(o), nil)
 		}
 	}
 	return nil, nil
@@ -340,17 +358,21 @@ func (s *Service) Vend(ctx context.Context, o Order) error {
 	switch result.State {
 	case abs.Success:
 		if _, err = s.Store.MoveWithVendResponse(ctx, o.ID, StatusVending, StatusSuccess, raw); err == nil {
+			s.event(LevelInfo, "order.delivered", o.ID, "delivered: "+describe(o), nil)
 			s.sendReceipt(ctx, o, result.Raw)
 		}
 	case abs.Failed:
 		if _, err = s.Store.MoveWithVendResponse(ctx, o.ID, StatusVending, StatusFailed, raw); err == nil {
 			if _, err = s.Store.Move(ctx, o.ID, StatusFailed, StatusRefundDue); err == nil {
+				s.event(LevelError, "order.failed", o.ID, fmt.Sprintf("ABS could not deliver it (%s); refund due %s", result.Message, formatNaira(o.Due())),
+					map[string]any{"refund_due_kobo": o.Due()})
 				s.alertRefundDue(o, result.Message)
 			}
 		}
 	default:
 		// Outcome unknown. Stays PENDING until ABS's webhook or a manual check settles it.
 		if _, err = s.Store.MoveWithVendResponse(ctx, o.ID, StatusVending, StatusPending, raw); err == nil {
+			s.event(LevelWarn, "order.pending", o.ID, "outcome unknown, check with ABS: "+result.Message, nil)
 			s.alertPending(o, result.Message)
 		}
 	}

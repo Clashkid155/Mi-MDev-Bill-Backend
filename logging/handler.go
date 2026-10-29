@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,7 +33,30 @@ const (
 // New returns a logger that prints the compact format to out. Colour is used
 // only when out is a terminal and NO_COLOR is not set.
 func New(out io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(&handler{out: out, color: isTerminal(out), level: level, mu: &sync.Mutex{}})
+	return slog.New(&handler{out: out, color: isTerminal(out), level: level, mu: &sync.Mutex{}, sink: &sinkHolder{}})
+}
+
+// Entry is one log line as the sink sees it: the bracketed tag, the text, and the level.
+type Entry struct {
+	Time   time.Time
+	Level  slog.Level
+	Tag    string
+	Detail string
+}
+
+// sinkHolder is shared by every copy of a handler (made by With), so a sink attached later reaches them all.
+type sinkHolder struct{ f atomic.Pointer[func(Entry)] }
+
+// SetSink makes the logger hand every WARN and ERROR line to f as well as printing it. f must not
+// block and must not log (it would be called again); it is how warnings and errors reach the app's
+// events. It reports false when log was not made by New.
+func SetSink(log *slog.Logger, f func(Entry)) bool {
+	h, ok := log.Handler().(*handler)
+	if !ok {
+		return false
+	}
+	h.sink.f.Store(&f)
+	return true
 }
 
 func isTerminal(w io.Writer) bool {
@@ -50,6 +74,7 @@ type handler struct {
 	level slog.Level
 	mu    *sync.Mutex // shared by copies made with WithAttrs
 	attrs []slog.Attr
+	sink  *sinkHolder
 }
 
 func (h *handler) Enabled(_ context.Context, l slog.Level) bool { return l >= h.level }
@@ -107,8 +132,14 @@ func (h *handler) Handle(_ context.Context, r slog.Record) error {
 	}
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	_, err := fmt.Fprintln(h.out, line)
+	h.mu.Unlock()
+
+	if r.Level >= slog.LevelWarn && h.sink != nil {
+		if f := h.sink.f.Load(); f != nil {
+			(*f)(Entry{Time: r.Time, Level: r.Level, Tag: r.Message, Detail: detail})
+		}
+	}
 	return err
 }
 

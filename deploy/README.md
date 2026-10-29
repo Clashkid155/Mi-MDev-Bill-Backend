@@ -198,6 +198,35 @@ In production the server refuses to start if `ADMIN_TOKEN`, `ABS_API_KEY` or the
 missing, or if `ABS_SANDBOX` is not `false` (with ABS in sandbox, customers would pay and receive nothing), so a half
 finished setup tells you at once. There is no ABS webhook secret to set: nothing uses ABS webhooks.
 
+### Admin tokens for the dashboard app
+
+`ADMIN_TOKEN` is the **owner** token: keep it for yourself, in your password manager. Give every other person or
+device its own named token, so you can tell them apart in the audit log and cancel one without touching the rest:
+
+```bash
+curl -s -X POST https://api.dizztech.com/admin/tokens -H "Authorization: Bearer OWNER_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"dizz phone","role":"admin"}'
+```
+
+The answer holds the token **once** (`mdev_...`); the server keeps only a hash, so it cannot show it again. Put it in
+the phone's secure storage (Keychain or Keystore), never in the app's code.
+
+| Role | May | May not |
+|---|---|---|
+| `owner` (the `ADMIN_TOKEN`) | everything, including making and revoking tokens | |
+| `admin` | read and change orders, refunds, expenses, settings; read the audit log | manage tokens |
+| `viewer` | read orders, stats, balances, expenses, settings | change anything; read the audit log |
+
+* `GET /admin/whoami` says which token is in use and its role (the app can call it after sign in).
+* `GET /admin/tokens` lists them (name, role, last 4 characters, last used and from where, revoked or not).
+* `DELETE /admin/tokens/{id}` revokes one at once. A lost phone: revoke its token and the rest carry on.
+* `GET /admin/audit` shows every change: who, from which address, which route, the order id, the result, and what was
+  sent (anything called token, secret, password or key is blanked). Reads are not logged. A viewer being refused and an
+  address being locked out for guessing a token are logged too.
+* The owner is emailed whenever a token is made or revoked, so a token made by someone who got hold of yours is noticed.
+
+Wrong-token guesses still count toward the lockout (5 in a row blocks that address for 15 minutes), for named tokens too.
+
 ## 6. HTTPS and Cloudflare
 
 **Certificate.** In Cloudflare open SSL/TLS, Origin Server, **Create Certificate** (free, up to 15 years).
@@ -453,15 +482,28 @@ Lines look like `[WARN]  [GetSystemData - ABS]  HTTP 401 ...`: the level, then w
 `[ERROR]` lines are the ones to read first. The program's own request lines name the route
 (`GET /v1/orders/{id}`), never the order id.
 
-Make sure the journal is kept across reboots and does not fill the disk:
+Make sure the journal is kept across reboots, for six months, and cannot fill the disk (the 2 GB cap is what actually
+bounds it: if the logs ever outgrow it the oldest lines go first, so look at `journalctl --disk-usage` now and then):
 
 ```bash
 mkdir -p /var/log/journal /etc/systemd/journald.conf.d
-printf '[Journal]\nSystemMaxUse=1G\nMaxRetentionSec=3month\n' > /etc/systemd/journald.conf.d/bills.conf
+printf '[Journal]\nStorage=persistent\nMaxRetentionSec=6month\nSystemMaxUse=2G\n' > /etc/systemd/journald.conf.d/bills.conf
 systemctl restart systemd-journald
 ```
 
 The logs hold order ids and some customer details, so treat them as private (only root can read the journal).
+
+### Events: the readable version, for the admin app
+
+The journal is the raw record for engineers. The program also keeps **events**: a short, redacted list of what
+happened, in words an owner can read, stored in the database (so it is in the backups) for `EVENT_RETENTION_DAYS`
+(180 by default). It holds orders created, paid, delivered, failed, expired and refunded, a payment that arrives late,
+short or for an unknown order, each start and stop of the server (with the version, so you can see when a deploy
+happened), and the server's own warnings and errors. It leaves out the web request lines, and removes phone numbers,
+emails, meter numbers, electricity tokens and secrets before anything is stored. The admin app reads it with
+`GET /admin/events` (filter by level, kind, order or time) and `GET /admin/events/summary` (a count for a badge), for owner
+and admin tokens. It does not replace the journal: when the server is down or crashing, `journalctl` is still where the real
+error is.
 
 ## 9. Deploying changes and keeping everything up to date
 

@@ -90,6 +90,10 @@ type Config struct {
 	// WebhookRetentionDays is how long the raw webhook bodies are kept (0 keeps
 	// them forever). Orders themselves are never deleted.
 	WebhookRetentionDays int64
+
+	// EventRetentionDays is how long events (what happened to orders, and the server's warnings and
+	// errors, redacted) are kept for the admin app; 0 keeps them forever.
+	EventRetentionDays int64
 }
 
 // MailConfigured reports whether enough is set to actually send email;
@@ -198,6 +202,11 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("WEBHOOK_RETENTION_DAYS must be 0 (keep forever) or more, got %v", retention)
 	}
 	c.WebhookRetentionDays = int64(retention)
+	events, err := envFloat("EVENT_RETENTION_DAYS", 180)
+	if err != nil {
+		return c, err
+	}
+	c.EventRetentionDays = int64(events)
 	if c.AdminAlertEmail != "" && !c.MailConfigured() {
 		return c, fmt.Errorf("ADMIN_ALERT_EMAIL needs ZEPTOMAIL_TOKEN and MAIL_FROM_EMAIL to send the alerts")
 	}

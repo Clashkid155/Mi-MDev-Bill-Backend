@@ -17,7 +17,7 @@ func load(t *testing.T, env map[string]string) (Config, error) {
 		"MARKUP_9MOBILE_PERCENT", "MARKUP_DEFAULT_PERCENT", "HIDDEN_PLANS", "ELECTRICITY_FEE_PERCENT", "ELECTRICITY_FEE_MIN_NAIRA",
 		"PAYMENT_FEE_WARN_PERCENT", "ZEPTOMAIL_TOKEN", "MAIL_FROM_EMAIL", "ADMIN_ALERT_EMAIL", "ABS_LOW_BALANCE_NAIRA", "ABS_BALANCE_CHECK_MINUTES",
 		"TRUST_PROXY", "BACKUP_DIR", "BACKUP_EVERY_MINUTES", "WEBHOOK_RETENTION_DAYS",
-		"ABS_API_KEY", "ABS_WEBHOOK_SECRET", "KORA_SECRET_KEY", "MONNIFY_API_KEY", "MONNIFY_SECRET_KEY", "MONNIFY_CONTRACT_CODE",
+		"EVENT_RETENTION_DAYS", "ABS_API_KEY", "ABS_WEBHOOK_SECRET", "KORA_SECRET_KEY", "MONNIFY_API_KEY", "MONNIFY_SECRET_KEY", "MONNIFY_CONTRACT_CODE",
 	} {
 		t.Setenv(key, "")
 		os.Unsetenv(key)
@@ -135,20 +135,21 @@ func TestServerSafetySettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.TrustProxy || c.BackupDir != "" || c.BackupEveryMinutes != 60 || c.WebhookRetentionDays != 90 {
+	if c.TrustProxy || c.BackupDir != "" || c.BackupEveryMinutes != 60 || c.WebhookRetentionDays != 90 || c.EventRetentionDays != 180 {
 		t.Errorf("defaults: trust %t, dir %q, every %d, retention %d", c.TrustProxy, c.BackupDir, c.BackupEveryMinutes, c.WebhookRetentionDays)
 	}
-	c, err = load(t, map[string]string{"TRUST_PROXY": "true", "BACKUP_DIR": " /var/backups/bills ", "BACKUP_EVERY_MINUTES": "30", "WEBHOOK_RETENTION_DAYS": "0"})
+	c, err = load(t, map[string]string{"TRUST_PROXY": "true", "BACKUP_DIR": " /var/backups/bills ", "BACKUP_EVERY_MINUTES": "30", "WEBHOOK_RETENTION_DAYS": "0", "EVENT_RETENTION_DAYS": "30"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.TrustProxy || c.BackupDir != "/var/backups/bills" || c.BackupEveryMinutes != 30 || c.WebhookRetentionDays != 0 {
+	if !c.TrustProxy || c.BackupDir != "/var/backups/bills" || c.BackupEveryMinutes != 30 || c.WebhookRetentionDays != 0 || c.EventRetentionDays != 30 {
 		t.Errorf("set: trust %t, dir %q, every %d, retention %d", c.TrustProxy, c.BackupDir, c.BackupEveryMinutes, c.WebhookRetentionDays)
 	}
 	for name, env := range map[string]map[string]string{
-		"backup every 0 minutes": {"BACKUP_EVERY_MINUTES": "0"},
-		"backup every nonsense":  {"BACKUP_EVERY_MINUTES": "soon"},
-		"negative retention":     {"WEBHOOK_RETENTION_DAYS": "-1"},
+		"backup every 0 minutes":   {"BACKUP_EVERY_MINUTES": "0"},
+		"backup every nonsense":    {"BACKUP_EVERY_MINUTES": "soon"},
+		"negative retention":       {"WEBHOOK_RETENTION_DAYS": "-1"},
+		"negative event retention": {"EVENT_RETENTION_DAYS": "-5"},
 	} {
 		if _, err := load(t, env); err == nil {
 			t.Errorf("%s should be refused", name)

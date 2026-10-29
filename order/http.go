@@ -36,13 +36,16 @@ type API struct {
 	RequireSignatures bool
 	// WebhookRetention is how long raw webhook bodies are kept; 0 keeps them forever.
 	WebhookRetention time.Duration
+	// EventRetention is how long events are kept; 0 keeps them forever.
+	EventRetention time.Duration
 	// KoraSecret is Kora's secret key; it signs Kora's webhooks, test ones too.
 	// Empty means Kora is not in use and its webhook is refused.
 	KoraSecret string
 
-	vending     sync.WaitGroup
-	lastChecked sync.Map // order id -> when Monnify was last asked about it
-	lastPurge   time.Time
+	vending        sync.WaitGroup
+	lastChecked    sync.Map // order id -> when Monnify was last asked about it
+	lastPurge      time.Time
+	lastEventPurge time.Time
 }
 
 const paymentCheckEvery = 5 * time.Second
@@ -72,6 +75,7 @@ func (a *API) Routes() http.Handler {
 //	GET /admin/settings; PUT /admin/settings/{key} {"value": ...}; DELETE /admin/settings/{key}; GET /admin/settings/history
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
 //	GET /admin/balances                              (what ABS and the payment provider are holding)
+//	GET /admin/whoami; GET/POST /admin/tokens; DELETE /admin/tokens/{id}; GET /admin/audit   (named tokens and the audit log, see admin_http.go)
 //
 // Newest first. status is optional and may list several; limit defaults to 50 (max 200).
 func (a *API) AdminRoutes() http.Handler {
@@ -88,6 +92,13 @@ func (a *API) AdminRoutes() http.Handler {
 	mux.HandleFunc("DELETE /admin/expenses/{id}", a.deleteExpense)
 	mux.HandleFunc("GET /admin/stats", a.stats)
 	mux.HandleFunc("GET /admin/balances", a.balances)
+	mux.HandleFunc("GET /admin/whoami", a.whoami)
+	mux.HandleFunc("GET /admin/tokens", a.listTokens)
+	mux.HandleFunc("POST /admin/tokens", a.createToken)
+	mux.HandleFunc("DELETE /admin/tokens/{id}", a.revokeToken)
+	mux.HandleFunc("GET /admin/audit", a.listAudit)
+	mux.HandleFunc("GET /admin/events", a.listEvents)
+	mux.HandleFunc("GET /admin/events/summary", a.eventsSummary)
 	return mux
 }
 
@@ -314,6 +325,8 @@ func (a *API) markRefunded(w http.ResponseWriter, r *http.Request) {
 		reply.Fail(w, http.StatusInternalServerError, "internal error")
 	default:
 		a.Log.Info("MarkRefunded - API", "detail", fmt.Sprintf("order %s marked refunded (%d kobo sent back, the refund cost %d kobo)", o.ID, o.Refunded(), o.RefundFeeKobo))
+		a.event(LevelInfo, "refund.sent", o.ID, fmt.Sprintf("refund recorded as sent: %s back to the customer, the refund cost %s", formatNaira(o.Refunded()), formatNaira(o.RefundFeeKobo)),
+			map[string]any{"refunded_kobo": o.Refunded(), "refund_fee_kobo": o.RefundFeeKobo})
 		reply.OK(w, http.StatusOK, adminViewOf(o))
 	}
 }
@@ -645,6 +658,7 @@ func (a *API) Sweep(ctx context.Context, every time.Duration) {
 
 func (a *API) sweepOnce(ctx context.Context) {
 	a.purgeWebhooks(ctx)
+	a.purgeEvents(ctx)
 	orders, err := a.Store.AwaitingPastExpiry(ctx, time.Now(), 100)
 	if err != nil {
 		a.Log.Error("Sweep - Order", "detail", err.Error())
@@ -676,6 +690,22 @@ func (a *API) purgeWebhooks(ctx context.Context) {
 	}
 	if n > 0 {
 		a.Log.Info("Sweep - Order", "detail", fmt.Sprintf("deleted %d webhook records older than %d days", n, int(a.WebhookRetention.Hours()/24)))
+	}
+}
+
+// purgeEvents deletes events older than the retention, at most once a day.
+func (a *API) purgeEvents(ctx context.Context) {
+	if a.EventRetention <= 0 || time.Since(a.lastEventPurge) < 24*time.Hour {
+		return
+	}
+	a.lastEventPurge = time.Now()
+	n, err := a.Store.PurgeEvents(ctx, time.Now().Add(-a.EventRetention))
+	if err != nil {
+		a.Log.Error("Sweep - Order", "detail", "could not purge old events: "+err.Error())
+		return
+	}
+	if n > 0 {
+		a.Log.Info("Sweep - Order", "detail", fmt.Sprintf("deleted %d events older than %d days", n, int(a.EventRetention.Hours()/24)))
 	}
 }
 

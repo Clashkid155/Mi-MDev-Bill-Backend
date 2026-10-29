@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -40,13 +41,19 @@ const (
 // is the providers' direct endpoints, or nil when real money is in use.
 func routes(cfg Config, log *slog.Logger, api *order.API, direct http.Handler) http.Handler {
 	fails := ratelimit.NewLockout(adminMaxWrongTokens, adminLockFor)
+	guard := &order.AdminGuard{Store: api.Store, Owner: cfg.AdminToken, Fails: fails, TrustProxy: cfg.TrustProxy, Log: log}
 	fails.OnLock = func(who string, blockFor time.Duration) {
 		api.NotifyOwner("admin-lockout:"+who, time.Hour, "Someone is guessing the admin token",
 			fmt.Sprintf("The address %s got the admin token wrong %d times in a row and is blocked for %d minutes.\n\n"+
 				"If that was you, nothing more is needed. If not, nobody has got in: the right token is still refused while blocked. "+
 				"If it keeps happening, change ADMIN_TOKEN.", who, adminMaxWrongTokens, int(blockFor.Minutes())))
+		if err := api.Store.AddAudit(context.Background(), order.AuditEntry{
+			Actor: "(unknown)", IP: who, Route: "admin lockout", Status: http.StatusTooManyRequests,
+			Detail: fmt.Sprintf("%d wrong tokens in a row; blocked for %d minutes", adminMaxWrongTokens, int(blockFor.Minutes())),
+		}); err != nil {
+			log.Error("Admin - API", "detail", "could not write the audit log: "+err.Error())
+		}
 	}
-	guard := func(next http.Handler) http.Handler { return requireAdmin(cfg.AdminToken, fails, cfg.TrustProxy, next) }
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -57,10 +64,10 @@ func routes(cfg Config, log *slog.Logger, api *order.API, direct http.Handler) h
 	// money, so they are only served while nothing real is at stake.
 	if direct != nil {
 		for _, prefix := range []string{"/abs/", "/monnify/", "/kora/", "/email/"} {
-			mux.Handle(prefix, guard(direct))
+			mux.Handle(prefix, guard.Wrap(direct))
 		}
 	}
-	mux.Handle("/admin/", guard(api.AdminRoutes()))
+	mux.Handle("/admin/", guard.Wrap(api.AdminRoutes()))
 	return secureHeaders(logging.Requests(log, mux))
 }
 
