@@ -115,11 +115,14 @@ var notElectricity = map[string]bool{
 	"DSTV": true, "GOTV": true, "STARTIMES": true,
 }
 
-const catalogTTL = 5 * time.Minute
+// catalogTTL is how long ABS's catalog is reused before it is fetched again. ABS limits a key to
+// 300 requests an hour and the catalog is large, so the longer the better; the price of a long
+// time is that a change at ABS (a price, a plan removed) shows up this much later. Ten minutes
+// is six fetches an hour at most.
+const catalogTTL = 10 * time.Minute
 
-// Catalog returns the cleaned catalog. ABS's catalog is large and ABS limits a
-// key to 300 requests an hour, so it is cached for a few minutes; if ABS cannot
-// be reached, the last good copy is served.
+// Catalog returns the cleaned catalog, reusing the last one for catalogTTL; if ABS cannot be
+// reached when it expires, the last good copy is served.
 func (c *Client) Catalog(ctx context.Context) (Catalog, error) {
 	c.catalogMu.Lock()
 	defer c.catalogMu.Unlock()

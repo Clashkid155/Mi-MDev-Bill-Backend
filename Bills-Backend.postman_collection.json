@@ -1,13 +1,13 @@
 {
 	"info": {
 		"name": "Bills Backend",
-		"description": "Test calls for the Mi MDev bills backend. Start the server with `go run .` (APP_ENV=sandbox). The app does not use ABS vouchers; the /abs/voucher request under \"ABS Vendor (direct)\" is only for testing ABS itself. The /abs, /monnify, /kora and /email folders call the providers directly and need the admin token when ADMIN_TOKEN is set; the server only serves them while APP_ENV=sandbox and ABS_SANDBOX=true. The /admin requests are always served and always need the token in production. Every response uses one envelope: {\"status\":\"successful\"|\"failed\",\"message\":\"...\",\"data\":{...},\"error\":\"...\"}. Look under `data` for the actual payload (order id, invoice reference, etc.); `error` is only present when status is \"failed\".",
+		"description": "Test calls for the Mi MDev bills backend.\n\nWHERE THE CALLS GO. baseUrl is the production server (https://api.dizztech.com). To work against your own computer pick the \"Mi MDev - Local\" environment (baseUrl http://localhost:8080, started with `go run .`); \"Mi MDev - Production\" is the same as the default. CAUTION: with production selected, \"Orders (app API)\" really creates orders and the simulated webhooks are real requests.\n\nTWO KINDS OF \"DIRECT\" FOLDERS. \"ABS Vendor (direct)\", \"Email (direct)\", \"Monnify (direct)\" and \"Kora (direct)\" call the TEST ROUTES OF OUR OWN SERVER (/abs, /monnify, /kora, /email), to test the backend's own provider clients with the keys in the server's settings. The server serves them only while APP_ENV=sandbox AND ABS_SANDBOX=true (otherwise 404, as on production and on a server running with live ABS settings), and they need the admin token when ADMIN_TOKEN is set. \"ABS (direct to ABS)\", \"Kora (direct to Kora)\", \"Monnify collections (direct to Monnify)\", \"Monnify Bills (direct to Monnify)\" and \"ZeptoMail (direct)\" call the PROVIDERS themselves with your own keys, which you put in the variables' CURRENT values (they stay on your computer; do not type keys into the initial values, which are saved in this file). Use them to check a provider on its own, whatever build is running.\n\nThe /admin requests are always served and always need the token in production. The app does not use ABS vouchers; /abs/voucher is only for testing ABS itself. Every response from our server uses one envelope: {\"status\":\"successful\"|\"failed\",\"message\":\"...\",\"data\":{...},\"error\":\"...\"}. Look under `data` for the payload; `error` is only present when status is \"failed\".",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
 		{
 			"key": "baseUrl",
-			"value": "http://localhost:8080"
+			"value": "https://api.dizztech.com"
 		},
 		{
 			"key": "invoiceReference",
@@ -83,6 +83,58 @@
 		},
 		{
 			"key": "newAdminToken",
+			"value": ""
+		},
+		{
+			"key": "absBaseUrl",
+			"value": "https://absvendor.com"
+		},
+		{
+			"key": "absApiKey",
+			"value": ""
+		},
+		{
+			"key": "absNetworkId",
+			"value": ""
+		},
+		{
+			"key": "absPlanId",
+			"value": ""
+		},
+		{
+			"key": "absDiscoId",
+			"value": ""
+		},
+		{
+			"key": "meterNumber",
+			"value": ""
+		},
+		{
+			"key": "testPhone",
+			"value": ""
+		},
+		{
+			"key": "koraBaseUrl",
+			"value": "https://api.korapay.com/merchant"
+		},
+		{
+			"key": "monnifyContractCode",
+			"value": ""
+		},
+		{
+			"key": "zeptoBaseUrl",
+			"value": "https://cpaas.zoho.com"
+		},
+		{
+			"key": "zeptoToken",
+			"value": ""
+		},
+		{
+			"key": "mailFromEmail",
+			"value": ""
+		},
+		{
+			"key": "testEmail",
 			"value": ""
 		}
 	],
@@ -1737,6 +1789,685 @@
 							]
 						},
 						"description": "Counts of info, warning and error events in the last hours (1 to 720, default 24) and the latest error: for a badge such as \"2 errors today\" that opens the list. Owner and admin tokens only."
+					}
+				}
+			]
+		},
+		{
+			"name": "ABS (direct to ABS)",
+			"description": "These direct folders talk to the provider itself, with your own key, so they work against any build (even production, where the /abs, /kora, /monnify and /email test routes of our own server are switched off). Put the key in the variable's CURRENT value (it stays on your computer); never type it in the initial value, which is saved in this file. Spend requests below send sandbox=1, so ABS only validates and does not charge or deliver; remove that row to make a REAL purchase.",
+			"item": [
+				{
+					"name": "Catalog",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/user/system/get_system_data.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"system",
+								"get_system_data.php"
+							]
+						},
+						"description": "ABS's catalog: networks, data plans, electricity services with the ids used below. About 600 KB. ABS allows 300 requests an hour per key, so do not hammer it.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Wallet balance and profile",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/user/profile/get_user_detail.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"profile",
+								"get_user_detail.php"
+							]
+						},
+						"description": "The wallet is data.user_wallets[0].walletbal. WARNING: the reply also holds personal details (name, phone, email, bank accounts); do not share a screenshot or paste it anywhere. This endpoint is not in ABS's documentation, so it could change.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Validate a meter",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/user/transaction/validate_meter.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"transaction",
+								"validate_meter.php"
+							]
+						},
+						"description": "Read only: returns the meter owner's name and address. provider_tid is an electricity service trackid from the catalog.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						},
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "provider_tid",
+									"value": "{{absDiscoId}}",
+									"type": "text"
+								},
+								{
+									"key": "meter_number",
+									"value": "{{meterNumber}}",
+									"type": "text"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Buy airtime (sandbox)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/user/transaction/buy_airtime.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"transaction",
+								"buy_airtime.php"
+							]
+						},
+						"description": "airtimetid is the network id from the catalog. amount is whole naira, minimum 50. sandbox=1 = validate only. Remove the sandbox row for a REAL purchase that spends your wallet.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						},
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "airtimetid",
+									"value": "{{absNetworkId}}",
+									"type": "text"
+								},
+								{
+									"key": "phoneno",
+									"value": "{{testPhone}}",
+									"type": "text"
+								},
+								{
+									"key": "amount",
+									"value": "100",
+									"type": "text"
+								},
+								{
+									"key": "sandbox",
+									"value": "1",
+									"type": "text"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Buy data (sandbox)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/user/transaction/buy_data.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"transaction",
+								"buy_data.php"
+							]
+						},
+						"description": "airtimetid is the network id and cardunittid the plan id (the bouquet trackid) from the catalog. sandbox=1 = validate only. Remove it for a REAL purchase.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						},
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "airtimetid",
+									"value": "{{absNetworkId}}",
+									"type": "text"
+								},
+								{
+									"key": "cardunittid",
+									"value": "{{absPlanId}}",
+									"type": "text"
+								},
+								{
+									"key": "phoneno",
+									"value": "{{testPhone}}",
+									"type": "text"
+								},
+								{
+									"key": "sandbox",
+									"value": "1",
+									"type": "text"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Buy electricity (sandbox)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/user/transaction/buy_electricity.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"user",
+								"transaction",
+								"buy_electricity.php"
+							]
+						},
+						"description": "provider_tid is the electricity service from the catalog, amount is whole naira (minimum 1000). Some services add a fee of their own (ABS took 1100 for a 1000 purchase on one): the backend leaves those out of the app. sandbox=1 = validate only.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						},
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "provider_tid",
+									"value": "{{absDiscoId}}",
+									"type": "text"
+								},
+								{
+									"key": "meter_number",
+									"value": "{{meterNumber}}",
+									"type": "text"
+								},
+								{
+									"key": "amount",
+									"value": "1000",
+									"type": "text"
+								},
+								{
+									"key": "sandbox",
+									"value": "1",
+									"type": "text"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Look up an order (Partner API)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/partner/v1/transaction.php?ident={{absOrderId}}",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"partner",
+								"v1",
+								"transaction.php"
+							],
+							"query": [
+								{
+									"key": "ident",
+									"value": "{{absOrderId}}"
+								}
+							]
+						},
+						"description": "Looks an order up by the ABS order id (ident) that live airtime and data replies carry in data.ident. Answers successful, Processing, failed or Refund. Partner endpoints only accept calls from an address on the ABS whitelist and need a website saved under API settings (see deploy/README.md section 3); otherwise ABS says why in message.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Partner account (daily cap)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/partner/v1/user.php",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"partner",
+								"v1",
+								"user.php"
+							]
+						},
+						"description": "Wallet balance and the daily cap and amount spent. Same whitelist and website requirement as the order lookup.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{absApiKey}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Kora (direct to Kora)",
+			"description": "These direct folders talk to the provider itself, with your own key, so they work against any build (even production, where the /abs, /kora, /monnify and /email test routes of our own server are switched off). Put the key in the variable's CURRENT value (it stays on your computer); never type it in the initial value, which is saved in this file. With a LIVE key \"Create a charge\" opens a real one-time account (no money moves unless someone pays into it).",
+			"item": [
+				{
+					"name": "Create a charge (bank transfer)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{koraBaseUrl}}/api/v1/charges/bank-transfer",
+							"host": [
+								"{{koraBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"charges",
+								"bank-transfer"
+							]
+						},
+						"description": "Opens a one-time bank account for the reference and amount (whole naira here, as Kora wants it). merchant_bears_cost true means the customer pays exactly this amount and Kora's fee comes out of what we settle. The test script saves the reference as koraReference.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{koraSecretKey}}",
+									"type": "string"
+								}
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"reference\": \"TEST-{{$timestamp}}\",\n  \"amount\": 100,\n  \"currency\": \"NGN\",\n  \"narration\": \"Mi MDev test\",\n  \"account_name\": \"Mi MDev\",\n  \"merchant_bears_cost\": true,\n  \"customer\": {\n    \"name\": \"Test Customer\",\n    \"email\": \"{{testEmail}}\"\n  }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.reference) { pm.collectionVariables.set(\"koraReference\", r.data.reference); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Look up a charge",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{koraBaseUrl}}/api/v1/charges/{{koraReference}}",
+							"host": [
+								"{{koraBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"charges",
+								"{{koraReference}}"
+							]
+						},
+						"description": "The charge's status, amount_paid, amount_accepted (what counts) and fee. This is what the backend asks Kora after every payment webhook; it never trusts the webhook's own amount.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{koraSecretKey}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Balances",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{koraBaseUrl}}/api/v1/balances",
+							"host": [
+								"{{koraBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"balances"
+							]
+						},
+						"description": "What Kora holds for you. The backend reads the NGN available balance from this reply for /admin/balances, and it works with the live key (the dashboard shows it). Run it here to see Kora's raw answer.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{koraSecretKey}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Monnify collections (direct to Monnify)",
+			"description": "These direct folders talk to the provider itself, with your own key, so they work against any build (even production, where the /abs, /kora, /monnify and /email test routes of our own server are switched off). Put the key in the variable's CURRENT value (it stays on your computer); never type it in the initial value, which is saved in this file. (Monnify is the backup payment provider; Kora is the one in use.) Run Login first: its test script saves the access token as monnifyToken for the other requests.",
+			"item": [
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/auth/login",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"auth",
+								"login"
+							]
+						},
+						"description": "Basic auth with your API key and secret key. The test script saves responseBody.accessToken as monnifyToken (valid about an hour).",
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "username",
+									"value": "{{monnifyApiKey}}",
+									"type": "string"
+								},
+								{
+									"key": "password",
+									"value": "{{monnifySecretKey}}",
+									"type": "string"
+								}
+							]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.responseBody && r.responseBody.accessToken) { pm.collectionVariables.set(\"monnifyToken\", r.responseBody.accessToken); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Create an invoice",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/invoice/create",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"invoice",
+								"create"
+							]
+						},
+						"description": "Opens a one-time account for the invoice reference. expiryDate is Nigerian time, yyyy-MM-dd HH:mm:ss. The test script saves the references as invoiceReference and transactionReference.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{monnifyToken}}",
+									"type": "string"
+								}
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 100,\n  \"currencyCode\": \"NGN\",\n  \"contractCode\": \"{{monnifyContractCode}}\",\n  \"invoiceReference\": \"TEST-{{$timestamp}}\",\n  \"customerName\": \"Test Customer\",\n  \"customerEmail\": \"{{testEmail}}\",\n  \"description\": \"Mi MDev test\",\n  \"expiryDate\": \"2030-01-01 12:00:00\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.responseBody) { pm.collectionVariables.set(\"invoiceReference\", r.responseBody.invoiceReference); pm.collectionVariables.set(\"transactionReference\", r.responseBody.transactionReference); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Invoice details",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v1/invoice/{{invoiceReference}}/details",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"invoice",
+								"{{invoiceReference}}",
+								"details"
+							]
+						},
+						"description": "The invoice's status (PENDING, PAID, EXPIRED) and the account it asked the customer to pay.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{monnifyToken}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Transaction details",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{monnifyBaseUrl}}/api/v2/transactions/{{transactionReference}}",
+							"host": [
+								"{{monnifyBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"v2",
+								"transactions",
+								"{{transactionReference}}"
+							]
+						},
+						"description": "What Monnify says was really paid: paymentStatus, amountPaid and totalPayable. The backend checks this after every payment webhook.",
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{monnifyToken}}",
+									"type": "string"
+								}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "ZeptoMail (direct)",
+			"description": "These direct folders talk to the provider itself, with your own key, so they work against any build (even production, where the /abs, /kora, /monnify and /email test routes of our own server are switched off). Put the key in the variable's CURRENT value (it stays on your computer); never type it in the initial value, which is saved in this file. This sends a REAL email to testEmail when the sender domain is verified.",
+			"item": [
+				{
+					"name": "Send an email",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Zoho-enczapikey {{zeptoToken}}"
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{zeptoBaseUrl}}/v1.1/email",
+							"host": [
+								"{{zeptoBaseUrl}}"
+							],
+							"path": [
+								"v1.1",
+								"email"
+							]
+						},
+						"description": "Sends one message the way the backend sends receipts and alerts. The Authorization header is \"Zoho-enczapikey \" followed by your send mail token. mailFromEmail must belong to a domain verified in ZeptoMail. zeptoBaseUrl must match the region of your ZeptoMail account (the backend's default is https://cpaas.zoho.com).",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"from\": {\n    \"address\": \"{{mailFromEmail}}\",\n    \"name\": \"Mi MDev\"\n  },\n  \"to\": [\n    {\n      \"email_address\": {\n        \"address\": \"{{testEmail}}\",\n        \"name\": \"Test\"\n      }\n    }\n  ],\n  \"subject\": \"Mi MDev test\",\n  \"textbody\": \"This is a test message.\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
 					}
 				}
 			]
