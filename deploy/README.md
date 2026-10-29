@@ -227,6 +227,34 @@ the phone's secure storage (Keychain or Keystore), never in the app's code.
 
 Wrong-token guesses still count toward the lockout (5 in a row blocks that address for 15 minutes), for named tokens too.
 
+**Who holds what.** The owner token lives in your password manager and nowhere else; never put it in an app. The dashboard
+on your phone gets an `admin` token, and anyone who only needs to look gets a `viewer` token. Then a stolen phone cannot
+make or revoke tokens.
+
+**Setting it up the first time** (after the deploy that adds these endpoints; production answers 404 for them before that):
+
+1. Make a token with the owner token (`POST /admin/tokens`, or "Make a token (owner)" in Postman).
+2. Copy the `token` from the answer straight into the app. It is shown once and cannot be recovered.
+3. Call `GET /admin/whoami` with it to check the name and role are what you expect.
+
+**A lost or stolen phone.**
+
+1. `GET /admin/tokens` with the owner token and find the phone's token by its name and last 4 characters.
+2. `DELETE /admin/tokens/{id}`. It stops working at once; every other token carries on.
+3. Check `GET /admin/audit?actor=<that name>` for anything it did before you revoked it.
+4. Make a new token for the replacement phone.
+
+**Changing the owner token** (for example if it may have leaked): put a new long random value in `ADMIN_TOKEN` in
+`/etc/bills/env` and run `sudo systemctl restart bills`. The old owner token stops working at once. Named tokens are
+stored in the database and are **not** affected; to cancel those too, revoke each one.
+
+**After restoring a backup** (Litestream or a snapshot): run `GET /admin/tokens` and check the list. A restore brings the
+tokens back as they were at that moment, so a token you revoked after the backup was taken **works again**, and one made
+after it is gone. Revoke the first kind again and make the second kind again.
+
+**Where it is stored.** Named tokens (as a one way scramble, never the token), the audit log and the events are in the
+database, so they are in the Litestream copy and the snapshots like everything else.
+
 ## 6. HTTPS and Cloudflare
 
 **Certificate.** In Cloudflare open SSL/TLS, Origin Server, **Create Certificate** (free, up to 15 years).
