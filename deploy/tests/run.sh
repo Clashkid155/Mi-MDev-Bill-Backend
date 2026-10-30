@@ -143,6 +143,30 @@ out=$(DRY_RUN=1 in_server "$here/deploy/deploy.sh" fake 2>&1); code=$?
 check "dry run: exits 0 and stops before the server" "[ $code = 0 ] && echo \"$out\" | grep -q 'dry run'"
 check "dry run: touches nothing" "[ \"\$(cat '$ROOT/opt/bills/bills-backend')\" = OLD ] && [ ! -s '$ROOT/calls.log' ]"
 
+# The version a deploy is stamped with comes from the git tag (deploy/version.sh).
+check "deploy: builds the version version.sh reports" "echo \"$out\" | grep -q \"building \$(deploy/version.sh) for\""
+
+echo "== version.sh"
+git_in() { local d=$1; shift; git -C "$d" -c user.name=test -c user.email=test@example.com "$@"; }
+new_repo() { REPO=$(mktemp -d); git -C "$REPO" init -q; git_in "$REPO" commit -q --allow-empty -m one; }
+version_of() { (cd "$REPO" && "$here/deploy/version.sh"); }
+
+new_repo
+check "no tag: the short commit" "[[ \"\$(version_of)\" =~ ^[0-9a-f]{7,}\$ ]]"
+git_in "$REPO" tag -a v1.0.0 -m 1.0.0
+check "on a release tag: just the number" "[ \"\$(version_of)\" = 1.0.0 ]"
+git_in "$REPO" commit -q --allow-empty -m two
+check "commits after the tag: says how many and which" "[[ \"\$(version_of)\" =~ ^1\\.0\\.0-1-g[0-9a-f]+\$ ]]"
+git_in "$REPO" tag v1.1.0
+check "a lightweight tag counts, and the nearest release wins" "[ \"\$(version_of)\" = 1.1.0 ]"
+git_in "$REPO" tag -a latest -m x
+check "tags that are not vX.Y.Z are ignored" "[ \"\$(version_of)\" = 1.1.0 ]"
+echo changed >"$REPO/file.txt"; git_in "$REPO" add file.txt; git_in "$REPO" commit -q -m three; git_in "$REPO" tag -a v2.0.0 -m 2.0.0
+echo more >>"$REPO/file.txt"
+check "uncommitted changes are marked" "[ \"\$(version_of)\" = 2.0.0-uncommitted ]"
+check "an untracked file does not count as a change" "git_in '$REPO' checkout -q -- file.txt && touch '$REPO/new.txt' && [ \"\$(version_of)\" = 2.0.0 ]"
+rm -rf "$REPO"
+
 # ---- install-tools.sh ----
 echo "== install-tools.sh"
 

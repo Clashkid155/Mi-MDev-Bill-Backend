@@ -259,7 +259,7 @@ func (a *Admin) eventsSummary(w http.ResponseWriter, r *http.Request) {
 
 // ServerInfo is what GET /admin/server reports about the running program. Nothing in it is secret.
 type ServerInfo struct {
-	Version          string    // the commit it was built from, "-uncommitted" if the tree had changes
+	Version          string    // the release it was built as, like "1.0.0"; "1.0.0-3-g1a2b3c4" is 3 commits after it, "-uncommitted" means the tree had changes
 	GoVersion        string    // the Go it was built with
 	Env              string    // "production" or "sandbox" (APP_ENV)
 	PaymentProvider  string    // "kora" or "monnify"

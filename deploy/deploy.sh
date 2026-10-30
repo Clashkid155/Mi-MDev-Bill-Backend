@@ -4,7 +4,8 @@
 #   deploy/deploy.sh [ssh-host]        # default host: bills (the name in ~/.ssh/config)
 #
 # 1. checks the code (vet, all tests with the race detector, known vulnerabilities),
-# 2. builds the program with the Go version pinned in go.mod,
+# 2. builds the program with the Go version pinned in go.mod, stamped with the release version
+#    from the git tag (deploy/version.sh),
 # 3. copies it to the server and checks the copy is byte for byte the same,
 # 4. keeps the running version as bills-backend.prev, swaps the new one in and restarts
 #    (the restart waits for purchases in progress to finish),
@@ -31,11 +32,13 @@ cd "$here" || exit 1
 PATH="$PATH:$(go env GOPATH)/bin"
 export PATH
 
-version=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
-if ! git diff --quiet HEAD -- 2>/dev/null; then
-	version="$version-uncommitted"
-	echo "note: there are uncommitted changes; deploying them as $version"
-fi
+# The version comes from the release tag (see deploy/version.sh). A deploy should be a changelog
+# commit with its vX.Y.Z tag, so anything else is allowed but called out.
+version=$(deploy/version.sh)
+case "$version" in
+	*-uncommitted) echo "note: there are uncommitted changes; deploying them as $version" ;;
+	*[!0-9.]*) echo "note: HEAD is not a tagged release (a changelog commit); deploying it as $version" ;;
+esac
 
 if [ -z "${SKIP_CHECKS:-}" ]; then
 	echo "== 1. checking the code"

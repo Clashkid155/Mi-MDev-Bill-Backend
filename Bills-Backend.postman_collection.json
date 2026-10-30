@@ -1582,7 +1582,7 @@
 								"server"
 							]
 						},
-						"description": "Which build is running and in what mode, for any admin token (viewers too). version is the commit it was built from (\"-uncommitted\" if the folder had changes when it was built), go_version, env (production or sandbox), abs_sandbox (ABS only validates, never charges), direct_test_routes (true only while the /abs, /kora, /monnify and /email test routes are served: sandbox with ABS_SANDBOX=true), payment_provider, started_at (unix seconds) and uptime_seconds. Use it to check a deploy is live, and to see which mode a local server is in when a test route gives 404."
+						"description": "Which build is running and in what mode, for any admin token (viewers too). version is the release it was built as, like 1.0.0, taken from the git tag (1.0.0-3-g1a2b3c4 means 3 commits after that release, and \"-uncommitted\" means the folder had changes when it was built), go_version, env (production or sandbox), abs_sandbox (ABS only validates, never charges), direct_test_routes (true only while the /abs, /kora, /monnify and /email test routes are served: sandbox with ABS_SANDBOX=true), payment_provider, started_at (unix seconds) and uptime_seconds. Use it to check a deploy is live, and to see which mode a local server is in when a test route gives 404."
 					}
 				},
 				{

@@ -25,8 +25,9 @@ import (
 	"Bills-Backend/platform"
 )
 
-// version is the commit this program was built from; deploy/deploy.sh sets it. When it is not set
-// (go run, or a build from the IDE) buildVersion reads the commit Go embedded in the binary.
+// version is the release this program was built as ("1.0.0", from the git tag; see deploy/version.sh);
+// deploy/deploy.sh sets it. When it is not set (go run, or a build from the IDE) buildVersion reads the
+// commit Go embedded in the binary.
 var version = "dev"
 
 // buildVersion is the version to report: the one deploy/deploy.sh stamped, else the commit Go

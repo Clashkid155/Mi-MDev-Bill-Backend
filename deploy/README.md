@@ -571,12 +571,17 @@ package and uses `platform` for the admin plumbing.
 
 ## 9. Deploying changes and keeping everything up to date
 
-**Which version is live?** Ask the server: `GET /admin/server` (any admin token) answers with `version` (the commit it was
-built from; `-uncommitted` means the folder had changes), the mode (`env`, `abs_sandbox`, `direct_test_routes`), when it
+**Which version is live?** Ask the server: `GET /admin/server` (any admin token) answers with `version` (the release, like
+`1.0.0`; `1.0.0-3-g1a2b3c4` is three commits after it and `-uncommitted` means the folder had changes), the mode (`env`, `abs_sandbox`, `direct_test_routes`), when it
 started and how long it has been up. The same version is in the journal's start-up line and in the `server.started` event,
-and `deploy.sh` ends by printing what it deployed. `git log` shows what that commit contained.
+and `deploy.sh` ends by printing what it deployed. `git show v1.0.0` shows the changelog for that release.
 
-**Every code change:** commit it if you like, then run `deploy/deploy.sh` (step 4). Changing a setting in
+**Releases.** A deploy is done from a *changelog commit*: a commit whose message lists what changed (starting with
+"Update to X.Y.Z."), that bumps the version by semver (fixes bump the last number, features the middle one, breaking
+changes the first) and carries the tag `vX.Y.Z`. `deploy/version.sh` turns the tag into the version the build is
+stamped with, and `deploy.sh` says so when you deploy something that is not exactly a tagged release.
+
+**Every code change:** make the changelog commit and tag, then run `deploy/deploy.sh` (step 4). Changing a setting in
 `/etc/bills/env` needs `sudo systemctl restart bills` on the server; many pricing, alert and mail settings can
 instead be changed live through the admin API (`PUT /admin/settings/{key}`) with no restart.
 
@@ -609,7 +614,7 @@ more than their happy path. `deploy/tests/run.sh` runs both against a fake serve
 `ssh`, `scp`, `systemctl`, `curl` and the rest) and simulates the bad days: a corrupted copy, a program or Caddy
 that does not come back, Caddy rejecting its config, Litestream logging errors, a tampered build, a first install.
 Run it after changing either script. It proves the logic (what is kept, rolled back and reported), not that real
-systemd or Caddy behave; the live runs showed that. `shellcheck deploy/*.sh` is also clean.
+systemd or Caddy behave; the live runs showed that. `shellcheck deploy/*.sh` was clean when last run.
 
 ## Checklist before real customers
 
