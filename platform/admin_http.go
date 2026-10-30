@@ -1,16 +1,46 @@
-package order
+package platform
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"Bills-Backend/reply"
 )
+
+// Admin serves the admin endpoints every part of the backend shares: who am I, the server's
+// version and mode, named tokens, the audit log and events. They go behind an AdminGuard.
+type Admin struct {
+	Store  *Store
+	Log    *slog.Logger
+	Alerts Alerter // tells the owner when a token is made or revoked; nil sends nothing
+	Info   ServerInfo
+}
+
+// Register adds the endpoints to mux.
+func (a *Admin) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /admin/whoami", a.whoami)
+	mux.HandleFunc("GET /admin/server", a.serverInfo)
+	mux.HandleFunc("GET /admin/tokens", a.listTokens)
+	mux.HandleFunc("POST /admin/tokens", a.createToken)
+	mux.HandleFunc("DELETE /admin/tokens/{id}", a.revokeToken)
+	mux.HandleFunc("GET /admin/audit", a.listAudit)
+	mux.HandleFunc("GET /admin/events", a.listEvents)
+	mux.HandleFunc("GET /admin/events/summary", a.eventsSummary)
+}
+
+// NotifyOwner emails the owner about something outside a purchase (a token made, an address
+// locked out). It returns at once and sends nothing when no Alerter is set.
+func (a *Admin) NotifyOwner(key string, throttle time.Duration, subject, body string) {
+	if a.Alerts != nil {
+		a.Alerts.Alert(key, throttle, subject, body)
+	}
+}
 
 // The token and audit endpoints, all behind the admin guard (see AdminGuard):
 //
@@ -34,7 +64,7 @@ func actorWith(w http.ResponseWriter, r *http.Request, what string, allowed ...R
 	return Actor{}, false
 }
 
-func (a *API) whoami(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) whoami(w http.ResponseWriter, r *http.Request) {
 	actor, ok := ActorFrom(r.Context())
 	if !ok {
 		reply.Fail(w, http.StatusForbidden, "not signed in")
@@ -43,7 +73,7 @@ func (a *API) whoami(w http.ResponseWriter, r *http.Request) {
 	reply.OK(w, http.StatusOK, map[string]any{"name": actor.Name, "role": actor.Role})
 }
 
-func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) listTokens(w http.ResponseWriter, r *http.Request) {
 	if _, ok := actorWith(w, r, "only the owner can manage tokens", RoleOwner); !ok {
 		return
 	}
@@ -56,7 +86,7 @@ func (a *API) listTokens(w http.ResponseWriter, r *http.Request) {
 	reply.OK(w, http.StatusOK, map[string]any{"tokens": tokens})
 }
 
-func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) createToken(w http.ResponseWriter, r *http.Request) {
 	actor, ok := actorWith(w, r, "only the owner can manage tokens", RoleOwner)
 	if !ok {
 		return
@@ -93,7 +123,7 @@ func (a *API) createToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *API) revokeToken(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) revokeToken(w http.ResponseWriter, r *http.Request) {
 	actor, ok := actorWith(w, r, "only the owner can manage tokens", RoleOwner)
 	if !ok {
 		return
@@ -118,7 +148,7 @@ func (a *API) revokeToken(w http.ResponseWriter, r *http.Request) {
 	reply.OK(w, http.StatusOK, token)
 }
 
-func (a *API) listAudit(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) listAudit(w http.ResponseWriter, r *http.Request) {
 	if _, ok := actorWith(w, r, "viewer tokens cannot read the audit log", RoleOwner, RoleAdmin); !ok {
 		return
 	}
@@ -155,7 +185,7 @@ func (a *API) listAudit(w http.ResponseWriter, r *http.Request) {
 // (warnings and errors) or error. kind is an exact kind or, ending in a dot, a family: "order.".
 // since is a day (2026-10-28) or a time (RFC 3339). before_id pages back; limit is 1 to 200.
 // Owner and admin tokens only: events carry what the server logged, even redacted.
-func (a *API) listEvents(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) listEvents(w http.ResponseWriter, r *http.Request) {
 	if _, ok := actorWith(w, r, "viewer tokens cannot read events", RoleOwner, RoleAdmin); !ok {
 		return
 	}
@@ -205,7 +235,7 @@ func (a *API) listEvents(w http.ResponseWriter, r *http.Request) {
 //
 // How many info, warning and error events there were lately, and the latest error: for a badge
 // ("2 errors today") that opens the list. hours is 1 to 720, default 24.
-func (a *API) eventsSummary(w http.ResponseWriter, r *http.Request) {
+func (a *Admin) eventsSummary(w http.ResponseWriter, r *http.Request) {
 	if _, ok := actorWith(w, r, "viewer tokens cannot read events", RoleOwner, RoleAdmin); !ok {
 		return
 	}
@@ -225,4 +255,37 @@ func (a *API) eventsSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply.OK(w, http.StatusOK, sum)
+}
+
+// ServerInfo is what GET /admin/server reports about the running program. Nothing in it is secret.
+type ServerInfo struct {
+	Version          string    // the commit it was built from, "-uncommitted" if the tree had changes
+	GoVersion        string    // the Go it was built with
+	Env              string    // "production" or "sandbox" (APP_ENV)
+	PaymentProvider  string    // "kora" or "monnify"
+	ABSSandbox       bool      // ABS only validates and never charges or delivers
+	DirectTestRoutes bool      // the /abs, /kora, /monnify and /email test routes are being served
+	StartedAt        time.Time // when this process started
+}
+
+// GET /admin/server (any admin token, viewers included)
+//
+// Which build is running and in what mode: version (the commit), go_version, env, abs_sandbox,
+// direct_test_routes, payment_provider, started_at (unix seconds) and uptime_seconds. It answers
+// "is my deploy live?" and "which mode is this server in?" without reading the journal.
+func (a *Admin) serverInfo(w http.ResponseWriter, r *http.Request) {
+	if _, ok := ActorFrom(r.Context()); !ok {
+		reply.Fail(w, http.StatusForbidden, "not signed in")
+		return
+	}
+	i := a.Info
+	uptime := int64(0)
+	if !i.StartedAt.IsZero() {
+		uptime = int64(time.Since(i.StartedAt).Seconds())
+	}
+	reply.OK(w, http.StatusOK, map[string]any{
+		"version": i.Version, "go_version": i.GoVersion, "env": i.Env, "payment_provider": i.PaymentProvider,
+		"abs_sandbox": i.ABSSandbox, "direct_test_routes": i.DirectTestRoutes,
+		"started_at": i.StartedAt.Unix(), "uptime_seconds": uptime,
+	})
 }

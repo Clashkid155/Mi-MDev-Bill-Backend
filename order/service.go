@@ -13,6 +13,7 @@ import (
 	"Bills-Backend/abs"
 	"Bills-Backend/email"
 	"Bills-Backend/payment"
+	"Bills-Backend/platform"
 )
 
 const invoiceLifetime = 30 * time.Minute
@@ -31,7 +32,7 @@ type Service struct {
 	Alerts Alerter
 	// Events records what happens to orders (created, paid, delivered, failed, expired, refunded)
 	// and what the server logs as warnings and errors, for the admin app. Nil records nothing.
-	Events *EventRecorder
+	Events *platform.EventRecorder
 	// MinPaymentKobo is the smallest payment the payment provider accepts
 	// (Kora: 10000, i.e. ₦100). Airtime below it cannot be ordered and data
 	// plans priced below it are refused and hidden from the catalog. 0 means no

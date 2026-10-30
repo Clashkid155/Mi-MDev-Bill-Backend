@@ -15,8 +15,10 @@ import (
 
 	"Bills-Backend/abs"
 	"Bills-Backend/kora"
+	"Bills-Backend/logging"
 	"Bills-Backend/monnify"
 	"Bills-Backend/payment"
+	"Bills-Backend/platform"
 	"Bills-Backend/reply"
 )
 
@@ -36,16 +38,16 @@ type API struct {
 	RequireSignatures bool
 	// WebhookRetention is how long raw webhook bodies are kept; 0 keeps them forever.
 	WebhookRetention time.Duration
-	// EventRetention is how long events are kept; 0 keeps them forever.
-	EventRetention time.Duration
 	// KoraSecret is Kora's secret key; it signs Kora's webhooks, test ones too.
 	// Empty means Kora is not in use and its webhook is refused.
 	KoraSecret string
+	// Gate says when new orders are stopped (maintenance). Nil never stops them. Only creating an
+	// order is stopped: an order already made is still paid, delivered, refunded and shown.
+	Gate platform.Gate
 
-	vending        sync.WaitGroup
-	lastChecked    sync.Map // order id -> when Monnify was last asked about it
-	lastPurge      time.Time
-	lastEventPurge time.Time
+	vending     sync.WaitGroup
+	lastChecked sync.Map // order id -> when Monnify was last asked about it
+	lastPurge   time.Time
 }
 
 const paymentCheckEvery = 5 * time.Second
@@ -75,11 +77,18 @@ func (a *API) Routes() http.Handler {
 //	GET /admin/settings; PUT /admin/settings/{key} {"value": ...}; DELETE /admin/settings/{key}; GET /admin/settings/history
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
 //	GET /admin/balances                              (what ABS and the payment provider are holding)
-//	GET /admin/whoami; GET/POST /admin/tokens; DELETE /admin/tokens/{id}; GET /admin/audit   (named tokens and the audit log, see admin_http.go)
+//	(whoami, server, tokens, audit and events are shared by every feature: see package platform)
 //
 // Newest first. status is optional and may list several; limit defaults to 50 (max 200).
 func (a *API) AdminRoutes() http.Handler {
 	mux := http.NewServeMux()
+	a.RegisterAdmin(mux)
+	return mux
+}
+
+// RegisterAdmin adds the bills admin endpoints to mux (the shared ones, such as tokens and events,
+// come from platform.Admin).
+func (a *API) RegisterAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/orders", a.listOrders)
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
 	mux.HandleFunc("POST /admin/orders/{id}/refunded", a.markRefunded)
@@ -92,14 +101,6 @@ func (a *API) AdminRoutes() http.Handler {
 	mux.HandleFunc("DELETE /admin/expenses/{id}", a.deleteExpense)
 	mux.HandleFunc("GET /admin/stats", a.stats)
 	mux.HandleFunc("GET /admin/balances", a.balances)
-	mux.HandleFunc("GET /admin/whoami", a.whoami)
-	mux.HandleFunc("GET /admin/tokens", a.listTokens)
-	mux.HandleFunc("POST /admin/tokens", a.createToken)
-	mux.HandleFunc("DELETE /admin/tokens/{id}", a.revokeToken)
-	mux.HandleFunc("GET /admin/audit", a.listAudit)
-	mux.HandleFunc("GET /admin/events", a.listEvents)
-	mux.HandleFunc("GET /admin/events/summary", a.eventsSummary)
-	return mux
 }
 
 // stats is the business at a glance, for the dashboard: counts, revenue, costs,
@@ -440,10 +441,40 @@ func deliveryData(kind string, raw json.RawMessage) json.RawMessage {
 	return parsed.Data
 }
 
+// refuseWhileStopped answers 503 itself when new orders are stopped for this caller and says so. A
+// retry of an order that already exists is let through (the app resending a request whose answer it
+// missed must get that order back), and so is everything else about an order that exists.
+func (a *API) refuseWhileStopped(w http.ResponseWriter, r *http.Request, req CreateRequest) bool {
+	if a.Gate == nil {
+		return false
+	}
+	block, stopped := a.Gate.OrdersBlocked(r.Context(), platform.CallerFrom(r))
+	if !stopped {
+		return false
+	}
+	if _, err := a.Store.ByIdempotencyKey(r.Context(), req.IdempotencyKey); err == nil {
+		return false
+	}
+	if block.Until > 0 {
+		if wait := block.Until - time.Now().Unix(); wait > 0 {
+			// The exact end is in the body ("until"); this only says when it is worth asking again.
+			w.Header().Set("Retry-After", strconv.FormatInt(min(wait, 3600), 10))
+		}
+	}
+	logging.Planned(w)
+	reply.FailData(w, http.StatusServiceUnavailable, block.Message, map[string]any{
+		"code": "maintenance", "notice_id": block.NoticeID, "title": block.Title, "until": block.Until,
+	})
+	return true
+}
+
 func (a *API) createOrder(w http.ResponseWriter, r *http.Request) {
 	var req CreateRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil {
 		reply.Fail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if a.refuseWhileStopped(w, r, req) {
 		return
 	}
 	o, err := a.Create(r.Context(), req)
@@ -658,7 +689,6 @@ func (a *API) Sweep(ctx context.Context, every time.Duration) {
 
 func (a *API) sweepOnce(ctx context.Context) {
 	a.purgeWebhooks(ctx)
-	a.purgeEvents(ctx)
 	orders, err := a.Store.AwaitingPastExpiry(ctx, time.Now(), 100)
 	if err != nil {
 		a.Log.Error("Sweep - Order", "detail", err.Error())
@@ -690,22 +720,6 @@ func (a *API) purgeWebhooks(ctx context.Context) {
 	}
 	if n > 0 {
 		a.Log.Info("Sweep - Order", "detail", fmt.Sprintf("deleted %d webhook records older than %d days", n, int(a.WebhookRetention.Hours()/24)))
-	}
-}
-
-// purgeEvents deletes events older than the retention, at most once a day.
-func (a *API) purgeEvents(ctx context.Context) {
-	if a.EventRetention <= 0 || time.Since(a.lastEventPurge) < 24*time.Hour {
-		return
-	}
-	a.lastEventPurge = time.Now()
-	n, err := a.Store.PurgeEvents(ctx, time.Now().Add(-a.EventRetention))
-	if err != nil {
-		a.Log.Error("Sweep - Order", "detail", "could not purge old events: "+err.Error())
-		return
-	}
-	if n > 0 {
-		a.Log.Info("Sweep - Order", "detail", fmt.Sprintf("deleted %d events older than %d days", n, int(a.EventRetention.Hours()/24)))
 	}
 }
 

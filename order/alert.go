@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"Bills-Backend/email"
+	"Bills-Backend/platform"
 )
 
 // Alerter tells the owner that something needs a person. It must never slow or
@@ -17,9 +18,7 @@ import (
 // key names the problem (one per order for a refund, one for "ABS wallet empty"),
 // and the same key is not sent again within throttle, so a run of failures is one
 // email, not fifty.
-type Alerter interface {
-	Alert(key string, throttle time.Duration, subject, body string)
-}
+type Alerter = platform.Alerter
 
 // EmailAlerts is an Alerter that emails the owner through the mailer the
 // receipts already use. With MAIL_SANDBOX on the mailer only logs the message.

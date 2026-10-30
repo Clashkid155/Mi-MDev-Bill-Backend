@@ -12,7 +12,9 @@ import (
 //
 //	[INFO]   [HTTP]  POST /v1/orders -> 200 · 84ms
 //
-// 4xx responses log as WARN and 5xx as ERROR.
+// 4xx responses log as WARN and 5xx as ERROR, except a 5xx a handler marked with Planned (a refusal
+// the owner chose, like orders stopped for maintenance), which logs as WARN so it is not mistaken
+// for a fault.
 func Requests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
@@ -21,7 +23,7 @@ func Requests(log *slog.Logger, next http.Handler) http.Handler {
 
 		detail := fmt.Sprintf("%s -> %d · %s", routeOf(r), rec.status, Duration(time.Since(started)))
 		switch {
-		case rec.status >= 500:
+		case rec.status >= 500 && !rec.planned:
 			log.Error("HTTP", "detail", detail)
 		case rec.status >= 400:
 			log.Warn("HTTP", "detail", detail)
@@ -31,13 +33,25 @@ func Requests(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
+// plannedHeader is how a handler tells Requests that its error answer is deliberate. It is removed
+// before the response is sent, so a client never sees it.
+const plannedHeader = "X-Planned-Refusal"
+
+// Planned marks the response as a deliberate refusal. Call it before writing the status.
+func Planned(w http.ResponseWriter) { w.Header().Set(plannedHeader, "1") }
+
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status  int
+	planned bool
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
+	if r.Header().Get(plannedHeader) != "" {
+		r.planned = true
+		r.Header().Del(plannedHeader)
+	}
 	r.ResponseWriter.WriteHeader(status)
 }
 

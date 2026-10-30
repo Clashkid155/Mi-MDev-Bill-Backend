@@ -1,4 +1,4 @@
-package order
+package platform
 
 import (
 	"bytes"
@@ -10,22 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"Bills-Backend/ratelimit"
 )
-
-const ownerToken = "owner-secret-token"
-
-// adminServer is the admin routes behind the real guard, over a real database.
-func adminServer(t *testing.T, owner string) (*httptest.Server, *fakes, *AdminGuard) {
-	t.Helper()
-	f := newFakes(t)
-	guard := &AdminGuard{Store: f.svc.Store, Owner: owner, Fails: ratelimit.NewLockout(5, 15*time.Minute), Log: f.svc.Log}
-	srv := httptest.NewServer(guard.Wrap((&API{Service: f.svc}).AdminRoutes()))
-	t.Cleanup(srv.Close)
-	return srv, f, guard
-}
 
 // call makes an admin request and returns the status and the "data" of the answer.
 func call(t *testing.T, srv *httptest.Server, method, path, token string, body any) (int, map[string]any) {
@@ -82,12 +67,12 @@ func TestTheOwnerMakesATokenThatWorks(t *testing.T) {
 
 	// Only a hash is kept: the token itself must not be in the database.
 	var stored string
-	f.svc.Store.db.QueryRow(`SELECT token_hash FROM admin_tokens`).Scan(&stored)
+	f.db.QueryRow(`SELECT token_hash FROM admin_tokens`).Scan(&stored)
 	if stored != hashToken(token) || strings.Contains(stored, token) || len(stored) != 64 {
 		t.Errorf("stored %q; want only the sha256 of the token", stored)
 	}
 	var all string
-	f.svc.Store.db.QueryRow(`SELECT group_concat(name || role || token_hash || hint || created_by) FROM admin_tokens`).Scan(&all)
+	f.db.QueryRow(`SELECT group_concat(name || role || token_hash || hint || created_by) FROM admin_tokens`).Scan(&all)
 	if strings.Contains(all, token) {
 		t.Error("the token is stored in clear somewhere")
 	}
@@ -146,9 +131,7 @@ func TestAViewerCanReadButNotChange(t *testing.T) {
 	if code, _ := call(t, srv, "GET", "/admin/audit", viewer, nil); code != 403 {
 		t.Errorf("a viewer read the audit log: %d", code)
 	}
-	var expenses int
-	f.svc.Store.db.QueryRow(`SELECT COUNT(*) FROM expenses`).Scan(&expenses)
-	if expenses != 0 {
+	if f.writes.Load() != 0 {
 		t.Error("a viewer changed something")
 	}
 	// Even the refused attempts are recorded.
@@ -350,10 +333,9 @@ func TestWithoutAnOwnerTokenTheRoutesAreOpenAsTheOpenUser(t *testing.T) {
 
 func TestOwnersAreToldWhenATokenIsMadeOrRevoked(t *testing.T) {
 	srv, f, _ := adminServer(t, ownerToken)
-	_, sent := alertsOn(t, f)
 	_, id := makeToken(t, srv, "new phone", RoleAdmin)
 	call(t, srv, "DELETE", fmt.Sprintf("/admin/tokens/%d", id), ownerToken, nil)
-	got := sent()
+	got := f.alerts.subjects()
 	if len(got) != 2 || !strings.Contains(got[0], "new admin token was made") || !strings.Contains(got[1], "token was revoked") {
 		t.Errorf("alerts: %q", got)
 	}
@@ -374,7 +356,7 @@ func TestManyAdminChangesAtOnceAreAllLogged(t *testing.T) {
 	}
 	wg.Wait()
 	var logged int
-	f.svc.Store.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE actor = 'busy'`).Scan(&logged)
+	f.db.QueryRow(`SELECT COUNT(*) FROM audit_log WHERE actor = 'busy'`).Scan(&logged)
 	if logged != n {
 		t.Errorf("%d of %d changes are in the audit log", logged, n)
 	}

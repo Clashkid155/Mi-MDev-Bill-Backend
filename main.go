@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -17,12 +19,46 @@ import (
 	"Bills-Backend/kora"
 	"Bills-Backend/logging"
 	"Bills-Backend/monnify"
+	"Bills-Backend/notify"
 	"Bills-Backend/order"
 	"Bills-Backend/payment"
+	"Bills-Backend/platform"
 )
 
-// version is the commit this program was built from; deploy/deploy.sh sets it.
+// version is the commit this program was built from; deploy/deploy.sh sets it. When it is not set
+// (go run, or a build from the IDE) buildVersion reads the commit Go embedded in the binary.
 var version = "dev"
+
+// buildVersion is the version to report: the one deploy/deploy.sh stamped, else the commit Go
+// recorded when it built the program ("-uncommitted" if the tree had changes), else "dev".
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return version
+	}
+	rev, modified := "", false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			modified = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return version
+	}
+	if len(rev) > 7 {
+		rev = rev[:7]
+	}
+	if modified {
+		rev += "-uncommitted"
+	}
+	return rev
+}
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "verify-backup" {
@@ -60,16 +96,32 @@ func verifyBackup(args []string, out, errOut io.Writer) int {
 }
 
 func serve(cfg Config, log *slog.Logger) {
-	store, err := order.OpenStore(cfg.DatabasePath)
+	// One database for every part of the backend: each package adds its own tables to it.
+	db, err := platform.OpenDB(cfg.DatabasePath)
 	if err != nil {
 		log.Error("Database", "detail", "could not open: "+err.Error())
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer db.Close()
+	store, err := order.NewStore(db)
+	if err != nil {
+		log.Error("Database", "detail", "could not set up the bills tables: "+err.Error())
+		os.Exit(1)
+	}
+	shared, err := platform.NewStore(db)
+	if err != nil {
+		log.Error("Database", "detail", "could not set up the shared tables: "+err.Error())
+		os.Exit(1)
+	}
+	noticeStore, err := notify.NewStore(db)
+	if err != nil {
+		log.Error("Database", "detail", "could not set up the notices table: "+err.Error())
+		os.Exit(1)
+	}
 
 	// Events: what happened to orders and the server's warnings and errors, kept for the admin app.
 	// Written in the background, so recording one never slows an order down.
-	events := order.NewEventRecorder(store, log)
+	events := platform.NewEventRecorder(shared, log)
 	logging.SetSink(log, events.Capture)
 
 	// The settings the owner can change from the admin API: .env gives the starting
@@ -158,8 +210,21 @@ func serve(cfg Config, log *slog.Logger) {
 		ABSWebhookSecret:       cfg.ABSWebhookSecret,
 		RequireSignatures:      cfg.RealMoney(),
 		WebhookRetention:       time.Duration(cfg.WebhookRetentionDays) * 24 * time.Hour,
-		EventRetention:         time.Duration(cfg.EventRetentionDays) * 24 * time.Hour,
 		KoraSecret:             cfg.KoraSecretKey,
+	}
+
+	// In-app notices (maintenance, news, "please update"). A notice can stop new orders, which the
+	// bills API asks about through the gate.
+	notices := &notify.Service{Store: noticeStore, Log: log, Events: events}
+	api.Gate = notices
+
+	// The admin endpoints every feature shares: tokens, audit, events, who am I, the server's version.
+	admin := &platform.Admin{
+		Store: shared, Log: log, Alerts: alerts,
+		Info: platform.ServerInfo{
+			Version: buildVersion(), GoVersion: runtime.Version(), Env: cfg.Env, PaymentProvider: cfg.PaymentProvider,
+			ABSSandbox: cfg.ABSSandbox, DirectTestRoutes: !cfg.RealMoney(), StartedAt: time.Now(),
+		},
 	}
 
 	// Direct access to the providers, for curl and Postman. These can spend real
@@ -178,7 +243,7 @@ func serve(cfg Config, log *slog.Logger) {
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           routes(cfg, log, api, directRoutes),
+		Handler:           routes(cfg, log, api, admin, notices, directRoutes),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second, // the slowest call out is ABS at 30s
@@ -190,6 +255,7 @@ func serve(cfg Config, log *slog.Logger) {
 	defer stop()
 
 	go api.Sweep(ctx, 5*time.Minute)
+	go shared.RunRetention(ctx, time.Duration(cfg.EventRetentionDays)*24*time.Hour, log)
 	if cfg.BackupDir != "" {
 		go api.WatchBackups(ctx, cfg.BackupDir, time.Duration(cfg.BackupEveryMinutes)*time.Minute)
 		log.Info("Config", "detail", fmt.Sprintf("database snapshots to %s every %d minutes", cfg.BackupDir, cfg.BackupEveryMinutes))
@@ -203,8 +269,8 @@ func serve(cfg Config, log *slog.Logger) {
 	}
 
 	go func() {
-		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t · version %s", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox, version))
-		events.Record(order.LevelInfo, "server.started", "", fmt.Sprintf("started: version %s, %s", version, cfg.Env), nil)
+		log.Info("Server", "detail", fmt.Sprintf("listening on %s · env=%s · abs_sandbox=%t · version %s", cfg.HTTPAddr, cfg.Env, cfg.ABSSandbox, buildVersion()))
+		events.Record(platform.LevelInfo, "server.started", "", fmt.Sprintf("started: version %s, %s", buildVersion(), cfg.Env), nil)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("Server", "detail", err.Error())
 			stop()
@@ -219,6 +285,6 @@ func serve(cfg Config, log *slog.Logger) {
 	if emailAlerts != nil {
 		emailAlerts.Wait() // and alerts being sent
 	}
-	events.Record(order.LevelInfo, "server.stopped", "", "stopped cleanly", nil)
+	events.Record(platform.LevelInfo, "server.stopped", "", "stopped cleanly", nil)
 	events.Close() // write what is queued, before the database closes
 }

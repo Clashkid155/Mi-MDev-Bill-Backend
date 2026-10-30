@@ -533,7 +533,48 @@ emails, meter numbers, electricity tokens and secrets before anything is stored.
 and admin tokens. It does not replace the journal: when the server is down or crashing, `journalctl` is still where the real
 error is.
 
+### Notices and maintenance mode
+
+The server can tell the apps things, and can stop new orders while you work. A **notice** is a short message
+(title, body, optional https link) with a kind (`info`, `warning` or `maintenance`), a time window and an audience.
+The apps read them with `GET /v1/notifications` (no login: the apps have no accounts) when they open. English is
+the only language so far (every notice has a `lang`, always `en`, so other languages can be added later without
+changing anything that exists). Push notifications are not built; this is the in-app inbox they would build on.
+
+**Who a notice is for.** The apps must send three headers on every request: `X-App` (`mi-mdev` for the customer app,
+`dashboard` for the admin app), `X-Platform` (`android`, `ios` or `web`) and `X-App-Version` (`1.4.2`). A notice can
+name apps, platforms and a version range (`min_version`, `max_version`, both inclusive). Leave a list empty for
+everyone. The headers are self reported, so they only choose what to show, never who may do what. An app that sends
+nothing sees only the notices for everyone, and an app that sends no version counts as the oldest, so "older than
+1.4" still reaches apps from before the headers existed.
+
+**Publishing.** From the admin app, or Postman's *Notifications* folder: `POST /admin/notifications` (owner and admin
+tokens), `PUT /admin/notifications/{id}` to change one (apps show it again to people who dismissed it), `DELETE` to
+end it now (it stays in `GET /admin/notifications` as ended). Times are unix seconds, an RFC 3339 time, or a day like
+`2026-11-03` (midnight Nigerian time). Every change is in the audit log and the events.
+
+**Stopping orders for maintenance.** Publish a notice with `"blocking": true`. While it is blocking, `POST /v1/orders`
+answers `503` with `data.code` = `maintenance`, the notice's text as the error, `data.until` (unix seconds, 0 if
+open ended) and a `Retry-After` of at most an hour. Use `block_from` and `block_until` to warn people early and
+refuse only inside the window. Only **new** orders are refused: an order already paid is always delivered, a retry of
+an order that already exists still returns it, and looking at an order, the webhooks and the whole admin side keep
+working. If the notices cannot be read for any reason, orders are **not** stopped. Ending the notice lifts the block at
+once. A blocking notice cannot be dismissed in the app. A forced update is the same thing with `max_version`.
+
+A typical night: publish a `maintenance` notice that starts a day ahead and blocks from 01:00 to 03:00, deploy at
+01:30, check `GET /admin/server`, and end the notice early if you finish early.
+
+**Where the code lives.** `platform/` is shared (admin tokens, audit log, events, `/admin/server`, database opening),
+`order/` is bills, `notify/` is notices. Neither feature imports the other (tests enforce it); bills asks a small
+`platform.Gate` whether orders are stopped and `main.go` plugs the notices into it. A new feature gets its own
+package and uses `platform` for the admin plumbing.
+
 ## 9. Deploying changes and keeping everything up to date
+
+**Which version is live?** Ask the server: `GET /admin/server` (any admin token) answers with `version` (the commit it was
+built from; `-uncommitted` means the folder had changes), the mode (`env`, `abs_sandbox`, `direct_test_routes`), when it
+started and how long it has been up. The same version is in the journal's start-up line and in the `server.started` event,
+and `deploy.sh` ends by printing what it deployed. `git log` shows what that commit contained.
 
 **Every code change:** commit it if you like, then run `deploy/deploy.sh` (step 4). Changing a setting in
 `/etc/bills/env` needs `sudo systemctl restart bills` on the server; many pricing, alert and mail settings can

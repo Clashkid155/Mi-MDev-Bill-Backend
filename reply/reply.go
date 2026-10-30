@@ -42,6 +42,12 @@ func Fail(w http.ResponseWriter, httpStatus int, message string) {
 	write(w, httpStatus, Envelope{Status: "failed", Error: message})
 }
 
+// FailData is Fail with details the caller can act on, in data: for example {"code":"maintenance"}
+// so an app can show its maintenance screen instead of a generic error.
+func FailData(w http.ResponseWriter, httpStatus int, message string, data any) {
+	write(w, httpStatus, Envelope{Status: "failed", Error: message, Data: data})
+}
+
 func write(w http.ResponseWriter, httpStatus int, e Envelope) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)

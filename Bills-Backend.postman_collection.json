@@ -86,6 +86,10 @@
 			"value": ""
 		},
 		{
+			"key": "noticeId",
+			"value": ""
+		},
+		{
 			"key": "absBaseUrl",
 			"value": "https://absvendor.com"
 		},
@@ -1564,6 +1568,24 @@
 			"name": "Admin tokens, audit and events",
 			"item": [
 				{
+					"name": "Server version and mode (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/server",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"server"
+							]
+						},
+						"description": "Which build is running and in what mode, for any admin token (viewers too). version is the commit it was built from (\"-uncommitted\" if the folder had changes when it was built), go_version, env (production or sandbox), abs_sandbox (ABS only validates, never charges), direct_test_routes (true only while the /abs, /kora, /monnify and /email test routes are served: sandbox with ABS_SANDBOX=true), payment_provider, started_at (unix seconds) and uptime_seconds. Use it to check a deploy is live, and to see which mode a local server is in when a test route gives 404."
+					}
+				},
+				{
 					"name": "Who am I (admin)",
 					"request": {
 						"method": "GET",
@@ -1789,6 +1811,288 @@
 							]
 						},
 						"description": "Counts of info, warning and error events in the last hours (1 to 720, default 24) and the latest error: for a badge such as \"2 errors today\" that opens the list. Owner and admin tokens only."
+					}
+				}
+			]
+		},
+		{
+			"name": "Notifications",
+			"item": [
+				{
+					"name": "What the app sees (public)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "X-App",
+								"value": "mi-mdev"
+							},
+							{
+								"key": "X-Platform",
+								"value": "android"
+							},
+							{
+								"key": "X-App-Version",
+								"value": "1.4.2"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v1/notifications",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"notifications"
+							]
+						},
+						"description": "No login. The app asks this when it opens (and may ask again now and then). The three headers say who is asking: X-App (which app: mi-mdev for the customer app, dashboard for the admin app), X-Platform (android, ios, web) and X-App-Version (1.4.2). The apps should send them on EVERY request. They are self reported, so they choose which notices to show, never who may do what. Query parameters app, platform and version work too, and headers win. An unnamed caller sees only notices for everyone; an unknown version counts as the oldest.\n\nThe answer is notifications (most urgent first, at most 20) and server_time (unix seconds). Each notice has kind (info, warning, maintenance), title, body, optional link_url and link_label, starts_at, ends_at (0 = until ended), dismissible, blocking and blocking_now, block_from, block_until, and updated_at. Remember dismissals by id AND updated_at: an edited notice should show again. While blocking_now is true, new orders are being refused: show the maintenance screen and do not let the customer start a payment.",
+						"auth": {
+							"type": "noauth"
+						}
+					}
+				},
+				{
+					"name": "What an old app sees (public)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/v1/notifications?app=mi-mdev&platform=ios&version=1.0.0",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v1",
+								"notifications"
+							],
+							"query": [
+								{
+									"key": "app",
+									"value": "mi-mdev"
+								},
+								{
+									"key": "platform",
+									"value": "ios"
+								},
+								{
+									"key": "version",
+									"value": "1.0.0"
+								}
+							]
+						},
+						"description": "The same call as a customer app with version 1.0.0. Use it to check that a notice with max_version reaches old apps.",
+						"auth": {
+							"type": "noauth"
+						}
+					}
+				},
+				{
+					"name": "List notices (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/notifications?status=active",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"notifications"
+							],
+							"query": [
+								{
+									"key": "status",
+									"value": "active"
+								}
+							]
+						},
+						"description": "Every notice with who it is for, who made it and where it is in its life (status: upcoming, active or ended), newest first. Any admin token, viewers too. Filter with status=active|upcoming|ended; limit 1 to 200 (default 50)."
+					}
+				},
+				{
+					"name": "Publish a heads-up (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/notifications",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"notifications"
+							]
+						},
+						"description": "Owner and admin tokens. A plain notice for everyone, shown from now until it is ended. kind is info, warning or maintenance. title up to 80 characters, body up to 1000. lang is optional and must be \"en\" for now. Times (starts_at, ends_at, block_from, block_until) can be unix seconds, an RFC 3339 time like 2026-11-03T01:00:00+01:00, or a day like 2026-11-03 (midnight Nigerian time). Leave them out for \"now\" and \"until I end it\". The answer carries the id, saved as the variable noticeId.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"kind\": \"info\",\n  \"title\": \"New: pay electricity bills\",\n  \"body\": \"You can now buy electricity tokens in the app.\",\n  \"link_url\": \"https://dizztech.com/whats-new\",\n  \"link_label\": \"See what is new\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) { pm.collectionVariables.set(\"noticeId\", r.data.id); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Publish maintenance that stops orders (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/notifications",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"notifications"
+							]
+						},
+						"description": "A scheduled maintenance. Shown to the customer app from starts_at, so people get a warning. New orders are refused (503, code maintenance) only between block_from and block_until; leave block_from out to refuse from the start and block_until out to refuse until the notice ends. Orders already paid are always completed, a retry of an order that already exists still works, and looking at an order is never refused. A notice that blocks cannot be dismissed. Ending the notice (Delete) lifts the block at once.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"kind\": \"maintenance\",\n  \"title\": \"Upgrade tonight\",\n  \"body\": \"Orders pause from 1am to 3am while we upgrade. Anything you have already paid for will still arrive.\",\n  \"blocking\": true,\n  \"apps\": [\n    \"mi-mdev\"\n  ],\n  \"starts_at\": \"2026-11-03T20:00:00+01:00\",\n  \"ends_at\": \"2026-11-04T03:30:00+01:00\",\n  \"block_from\": \"2026-11-04T01:00:00+01:00\",\n  \"block_until\": \"2026-11-04T03:00:00+01:00\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) { pm.collectionVariables.set(\"noticeId\", r.data.id); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Publish a forced update (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/notifications",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"notifications"
+							]
+						},
+						"description": "Tells old Android apps to update, and stops them ordering. max_version is inclusive, so 1.3.9 reaches 1.3.9 and everything older, including apps that do not send a version. min_version works the same from the other side. apps and platforms are lists (leave out for everyone).",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"kind\": \"warning\",\n  \"title\": \"Please update the app\",\n  \"body\": \"This version is no longer supported. Update to keep buying.\",\n  \"link_url\": \"https://play.google.com/store/apps/details?id=com.example.mimdev\",\n  \"link_label\": \"Update\",\n  \"blocking\": true,\n  \"apps\": [\n    \"mi-mdev\"\n  ],\n  \"platforms\": [\n    \"android\"\n  ],\n  \"max_version\": \"1.3.9\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const r = pm.response.json();",
+									"if (r.data && r.data.id) { pm.collectionVariables.set(\"noticeId\", r.data.id); }"
+								]
+							}
+						}
+					]
+				},
+				{
+					"name": "Change a notice (admin)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/notifications/{{noticeId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"notifications",
+								"{{noticeId}}"
+							]
+						},
+						"description": "Replaces the notice with what is sent (send the whole notice, as when making one). Not possible once it has ended: 409, make a new one. Changing it bumps updated_at, so apps show it again to people who dismissed the old text.",
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"kind\": \"info\",\n  \"title\": \"New: pay electricity bills\",\n  \"body\": \"Electricity tokens are now in the app, with no extra fee on airtime.\",\n  \"dismissible\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						}
+					}
+				},
+				{
+					"name": "End a notice now (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/notifications/{{noticeId}}",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"notifications",
+								"{{noticeId}}"
+							]
+						},
+						"description": "Ends it at this moment: it disappears from the app and, if it was stopping orders, orders flow again. It stays in the admin list as ended (an audit trail). Ending twice gives 409."
 					}
 				}
 			]

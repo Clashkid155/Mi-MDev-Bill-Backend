@@ -6,12 +6,10 @@ import (
 	"database/sql"
 	_ "embed"
 	"errors"
-	"fmt"
-	"os"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"Bills-Backend/platform"
 )
 
 //go:embed schema.sql
@@ -99,73 +97,46 @@ var ErrNotFound = errors.New("order: not found")
 
 type Store struct{ db *sql.DB }
 
+// OpenStore opens the shared database at path and adds the bills tables to it. The server opens the
+// database itself (platform.OpenDB) so the other packages can add their tables too; this is for
+// tests and tools that only need the bills tables.
 func OpenStore(path string) (*Store, error) {
-	if err := keepPrivate(path); err != nil {
-		return nil, err
-	}
-	// foreign_keys: nothing refers to anything yet, but a reference added later
-	// should be enforced from its first day.
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+	db, err := platform.OpenDB(path)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // SQLite allows one writer; this avoids "database is locked"
-	if _, err := db.Exec(schema); err != nil {
+	store, err := NewStore(db)
+	if err != nil {
 		db.Close()
 		return nil, err
 	}
-	// Refuse to run on a damaged file: better a stopped server than silently wrong money.
-	var check string
-	if err := db.QueryRow(`PRAGMA quick_check`).Scan(&check); err != nil || check != "ok" {
-		db.Close()
-		return nil, fmt.Errorf("the database file %s is damaged (restore the latest backup): %v %s", path, err, check)
+	return store, nil
+}
+
+// NewStore adds the bills tables (and any columns an older database lacks) to db.
+func NewStore(db *sql.DB) (*Store, error) {
+	if _, err := db.Exec(schema); err != nil {
+		return nil, err
 	}
 	// Databases created before these columns existed need them added.
 	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name", "plan_note"} {
 		if err := addColumnIfMissing(db, "orders", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
-			db.Close()
 			return nil, err
 		}
 	}
 	for _, column := range []string{"cost_kobo", "fee_kobo", "total_kobo", "payment_fee_kobo", "refund_fee_kobo", "refund_amount_kobo", "refunded_at"} {
 		if err := addColumnIfMissing(db, "orders", column, "INTEGER NOT NULL DEFAULT 0"); err != nil {
-			db.Close()
 			return nil, err
 		}
 	}
 	if err := addColumnIfMissing(db, "orders", "refund_note", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		db.Close()
 		return nil, err
 	}
-	// SQLite gives the -wal and -shm files the main file's permissions; make sure
-	// the main file is the private one it was above.
-	_ = keepPrivate(path)
 	return &Store{db: db}, nil
 }
 
-// keepPrivate makes the database file readable by its owner only: it holds
-// customers' emails and phone numbers and the electricity tokens we sold. A
-// missing file is created empty with those permissions first, so there is never
-// a moment when it is open to others.
-func keepPrivate(path string) error {
-	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	f.Close()
-	if err := os.Chmod(path, 0o600); err != nil {
-		return err
-	}
-	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := os.Chmod(path+suffix, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	return nil
-}
+// DB is the shared database.
+func (s *Store) DB() *sql.DB { return s.db }
 
 func addColumnIfMissing(db *sql.DB, table, column, definition string) error {
 	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)

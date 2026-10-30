@@ -1,10 +1,9 @@
-package order
+package platform
 
 import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -350,20 +349,4 @@ func (s *Store) PurgeEvents(ctx context.Context, before time.Time) (int64, error
 		return 0, err
 	}
 	return res.RowsAffected()
-}
-
-// event records something about an order's life, if events are switched on.
-func (s *Service) event(level, kind, orderID, message string, detail map[string]any) {
-	s.Events.Record(level, kind, orderID, message, detail)
-}
-
-// describe says what an order is, with no customer details: "airtime ₦500.00" or "data MTN 1GB Daily".
-func describe(o Order) string {
-	what := o.Kind
-	if o.PlanName != "" {
-		what += " " + o.PlanName
-	} else if o.NetworkName != "" {
-		what += " " + o.NetworkName
-	}
-	return fmt.Sprintf("%s, %s", what, formatNaira(o.Due()))
 }

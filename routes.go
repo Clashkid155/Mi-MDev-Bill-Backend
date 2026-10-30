@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"Bills-Backend/logging"
+	"Bills-Backend/notify"
 	"Bills-Backend/order"
+	"Bills-Backend/platform"
 	"Bills-Backend/ratelimit"
 	"Bills-Backend/reply"
 )
@@ -39,15 +41,15 @@ const (
 // routes puts every endpoint together: the public API behind its rate limits,
 // the admin routes behind the token, and security headers on everything. direct
 // is the providers' direct endpoints, or nil when real money is in use.
-func routes(cfg Config, log *slog.Logger, api *order.API, direct http.Handler) http.Handler {
+func routes(cfg Config, log *slog.Logger, api *order.API, admin *platform.Admin, notices *notify.Service, direct http.Handler) http.Handler {
 	fails := ratelimit.NewLockout(adminMaxWrongTokens, adminLockFor)
-	guard := &order.AdminGuard{Store: api.Store, Owner: cfg.AdminToken, Fails: fails, TrustProxy: cfg.TrustProxy, Log: log}
+	guard := &platform.AdminGuard{Store: admin.Store, Owner: cfg.AdminToken, Fails: fails, TrustProxy: cfg.TrustProxy, Log: log}
 	fails.OnLock = func(who string, blockFor time.Duration) {
-		api.NotifyOwner("admin-lockout:"+who, time.Hour, "Someone is guessing the admin token",
+		admin.NotifyOwner("admin-lockout:"+who, time.Hour, "Someone is guessing the admin token",
 			fmt.Sprintf("The address %s got the admin token wrong %d times in a row and is blocked for %d minutes.\n\n"+
 				"If that was you, nothing more is needed. If not, nobody has got in: the right token is still refused while blocked. "+
 				"If it keeps happening, change ADMIN_TOKEN.", who, adminMaxWrongTokens, int(blockFor.Minutes())))
-		if err := api.Store.AddAudit(context.Background(), order.AuditEntry{
+		if err := admin.Store.AddAudit(context.Background(), platform.AuditEntry{
 			Actor: "(unknown)", IP: who, Route: "admin lockout", Status: http.StatusTooManyRequests,
 			Detail: fmt.Sprintf("%d wrong tokens in a row; blocked for %d minutes", adminMaxWrongTokens, int(blockFor.Minutes())),
 		}); err != nil {
@@ -59,7 +61,11 @@ func routes(cfg Config, log *slog.Logger, api *order.API, direct http.Handler) h
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		reply.OKWithMessage(w, http.StatusOK, "ok", nil)
 	})
-	mux.Handle("/", limitPublic(cfg.TrustProxy, api.Routes()))
+	// The apps' endpoints: bills (orders, catalog) and notices share one table and one set of limits.
+	publicMux := http.NewServeMux()
+	publicMux.Handle("/", api.Routes())
+	notices.RegisterPublic(publicMux)
+	mux.Handle("/", limitPublic(cfg.TrustProxy, publicMux))
 	// Direct access to the providers, for curl and Postman. These can spend real
 	// money, so they are only served while nothing real is at stake.
 	if direct != nil {
@@ -67,7 +73,12 @@ func routes(cfg Config, log *slog.Logger, api *order.API, direct http.Handler) h
 			mux.Handle(prefix, guard.Wrap(direct))
 		}
 	}
-	mux.Handle("/admin/", guard.Wrap(api.AdminRoutes()))
+	// Every feature adds its admin endpoints to the same table; one guard protects them all.
+	adminMux := http.NewServeMux()
+	api.RegisterAdmin(adminMux)
+	admin.Register(adminMux)
+	notices.RegisterAdmin(adminMux)
+	mux.Handle("/admin/", guard.Wrap(adminMux))
 	return secureHeaders(logging.Requests(log, mux))
 }
 

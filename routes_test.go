@@ -16,7 +16,9 @@ import (
 
 	"Bills-Backend/abs"
 	"Bills-Backend/logging"
+	"Bills-Backend/notify"
 	"Bills-Backend/order"
+	"Bills-Backend/platform"
 )
 
 // testServer is the real route table over a real (temporary) database. Nothing
@@ -38,7 +40,18 @@ func testServerWith(t *testing.T, cfg Config, direct http.Handler, alerts order.
 	log := logging.New(&logs, slog.LevelInfo)
 	vendor := abs.New("http://127.0.0.1:1", "k", true) // nothing listens there: a meter check that gets through fails fast with 502
 	api := &order.API{Service: &order.Service{Store: store, Vendor: vendor, Log: log, Alerts: alerts}, KoraSecret: "sk_test"}
-	return routes(cfg, log, api, direct), &logs
+	shared, err := platform.NewStore(store.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &platform.Admin{Store: shared, Log: log, Alerts: alerts}
+	noticeStore, err := notify.NewStore(store.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	notices := &notify.Service{Store: noticeStore, Log: log}
+	api.Gate = notices
+	return routes(cfg, log, api, admin, notices, direct), &logs
 }
 
 func do(h http.Handler, method, path, auth, remote string, headers ...string) *httptest.ResponseRecorder {
@@ -349,5 +362,81 @@ func TestALockoutIsInTheAuditLog(t *testing.T) {
 	_, body := bearer(h, "GET", "/admin/audit", "owner-secret", "192.0.2.9:1", "")
 	if !strings.Contains(body, "admin lockout") || !strings.Contains(body, "198.51.100.77") || strings.Contains(body, "wrong0") {
 		t.Errorf("the lockout should be in the audit log with the address and no guessed token: %s", body)
+	}
+}
+
+// The whole path an owner uses before maintenance: publish a notice that stops orders from the admin
+// app, see the customer app told about it and refused new orders, then end it and see orders resume.
+func TestAMaintenanceNoticeStopsNewOrdersUntilItIsEnded(t *testing.T) {
+	h, logs := testServer(t, Config{AdminToken: "s3cret"}, nil)
+
+	send := func(method, path, auth, body string, headers ...string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.RemoteAddr = "192.0.2.50:1000"
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		for i := 0; i+1 < len(headers); i += 2 {
+			req.Header.Set(headers[i], headers[i+1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	order := `{"idempotency_key":"maintenance-test-0001","kind":"airtime","network":"MTNAIR6TFD","recipient":"08012345678","amount_kobo":10000,"email":"a@b.co"}`
+	customer := []string{"X-App", "mi-mdev", "X-Platform", "android", "X-App-Version", "1.4.2"}
+
+	if rec := send("POST", "/v1/orders", "", order, customer...); rec.Code == 503 {
+		t.Fatalf("orders were refused with no maintenance notice: %s", rec.Body)
+	}
+
+	made := send("POST", "/admin/notifications", "Bearer s3cret",
+		`{"kind":"maintenance","title":"Back at 3am","body":"Upgrading.","blocking":true,"apps":["mi-mdev"]}`)
+	if made.Code != 200 {
+		t.Fatalf("publishing answered %d: %s", made.Code, made.Body)
+	}
+	var notice struct {
+		Data struct {
+			ID int64 `json:"id"`
+		} `json:"data"`
+	}
+	json.Unmarshal(made.Body.Bytes(), &notice)
+
+	// The app is told (no login needed) ...
+	seen := send("GET", "/v1/notifications", "", "", customer...)
+	if seen.Code != 200 || !strings.Contains(seen.Body.String(), `"blocking_now":true`) {
+		t.Errorf("the app was not told: %d %s", seen.Code, seen.Body)
+	}
+	// ... and new orders from it are refused, in a shape the app can act on.
+	refused := send("POST", "/v1/orders", "", order, customer...)
+	if refused.Code != 503 || !strings.Contains(refused.Body.String(), `"code":"maintenance"`) || !strings.Contains(refused.Body.String(), "Upgrading.") {
+		t.Errorf("a new order during maintenance: %d %s", refused.Code, refused.Body)
+	}
+	// A refusal the owner chose is a warning in the log (so it never fills the events with "errors"),
+	// and the marker that says so never reaches the app.
+	if refused.Header().Get("X-Planned-Refusal") != "" {
+		t.Error("the logging marker leaked to the client")
+	}
+	if got := logs.String(); !strings.Contains(got, "[WARN]   [HTTP]  POST /v1/orders -> 503") || strings.Contains(got, "[ERROR]  [HTTP]  POST /v1/orders -> 503") {
+		t.Errorf("a planned refusal must log as a warning:\n%s", got)
+	}
+	// The dashboard is a different app: the notice names only the customer app.
+	if rec := send("POST", "/v1/orders", "", order, "X-App", "dashboard"); rec.Code == 503 {
+		t.Error("a notice for the customer app must not stop other apps")
+	}
+	// Checking an order or reading notices is never blocked, and neither is the admin app.
+	if rec := send("GET", "/admin/notifications", "Bearer s3cret", ""); rec.Code != 200 {
+		t.Errorf("the admin app answered %d during maintenance", rec.Code)
+	}
+
+	// Ending it lifts the block at once.
+	if rec := send("DELETE", fmt.Sprintf("/admin/notifications/%d", notice.Data.ID), "Bearer s3cret", ""); rec.Code != 200 {
+		t.Fatalf("ending answered %d: %s", rec.Code, rec.Body)
+	}
+	if rec := send("POST", "/v1/orders", "", order, customer...); rec.Code == 503 {
+		t.Errorf("orders were still refused after the notice ended: %s", rec.Body)
+	}
+	if seen := send("GET", "/v1/notifications", "", "", customer...); strings.Contains(seen.Body.String(), "Back at 3am") {
+		t.Errorf("the ended notice is still shown: %s", seen.Body)
 	}
 }

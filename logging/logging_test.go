@@ -42,6 +42,33 @@ func TestRequests(t *testing.T) {
 	}
 }
 
+func TestAPlannedRefusalIsAWarningNotAFault(t *testing.T) {
+	var out bytes.Buffer
+	planned := true
+	handler := Requests(New(&out, slog.LevelInfo), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if planned {
+			Planned(w)
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/orders", nil))
+	if got := out.String(); !strings.HasPrefix(got, "[WARN]   [HTTP]  POST /v1/orders -> 503 · ") {
+		t.Errorf("a planned 503 must log as a warning: %q", got)
+	}
+	if rec.Header().Get(plannedHeader) != "" {
+		t.Error("the marker must never reach the client")
+	}
+
+	out.Reset()
+	planned = false
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/orders", nil))
+	if got := out.String(); !strings.HasPrefix(got, "[ERROR]  [HTTP]  POST /v1/orders -> 503 · ") {
+		t.Errorf("an unplanned 503 is still a fault: %q", got)
+	}
+}
+
 func TestBytes(t *testing.T) {
 	for n, want := range map[int]string{512: "512 B", 3500: "3.4 KB", 2 << 20: "2.0 MB"} {
 		if got := Bytes(n); got != want {
