@@ -44,7 +44,7 @@ func testServerWith(t *testing.T, cfg Config, direct http.Handler, alerts order.
 	if err != nil {
 		t.Fatal(err)
 	}
-	admin := &platform.Admin{Store: shared, Log: log, Alerts: alerts}
+	admin := &platform.Admin{Store: shared, Log: log, Alerts: alerts, Providers: platform.NewProviderHealth(shared, log, nil, nil)}
 	noticeStore, err := notify.NewStore(store.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -438,5 +438,16 @@ func TestAMaintenanceNoticeStopsNewOrdersUntilItIsEnded(t *testing.T) {
 	}
 	if seen := send("GET", "/v1/notifications", "", "", customer...); strings.Contains(seen.Body.String(), "Back at 3am") {
 		t.Errorf("the ended notice is still shown: %s", seen.Body)
+	}
+}
+
+func TestProviderHealthIsAnAdminRoute(t *testing.T) {
+	h, _ := testServer(t, Config{AdminToken: "s3cret"}, nil)
+	if code := do(h, "GET", "/admin/providers", "", "192.0.2.60:1000").Code; code != 401 {
+		t.Errorf("with no token: %d, want 401", code)
+	}
+	rec := do(h, "GET", "/admin/providers", "Bearer s3cret", "192.0.2.61:1000")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"providers":[]`) {
+		t.Errorf("with the token: %d %s", rec.Code, rec.Body)
 	}
 }

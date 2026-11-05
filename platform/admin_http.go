@@ -20,6 +20,8 @@ type Admin struct {
 	Log    *slog.Logger
 	Alerts Alerter // tells the owner when a token is made or revoked; nil sends nothing
 	Info   ServerInfo
+	// Providers is how the outside services have been answering; nil leaves GET /admin/providers out.
+	Providers *ProviderHealth
 }
 
 // Register adds the endpoints to mux.
@@ -32,6 +34,9 @@ func (a *Admin) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/audit", a.listAudit)
 	mux.HandleFunc("GET /admin/events", a.listEvents)
 	mux.HandleFunc("GET /admin/events/summary", a.eventsSummary)
+	if a.Providers != nil {
+		mux.HandleFunc("GET /admin/providers", a.providers)
+	}
 }
 
 // NotifyOwner emails the owner about something outside a purchase (a token made, an address

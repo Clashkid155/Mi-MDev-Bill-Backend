@@ -124,6 +124,9 @@ func serve(cfg Config, log *slog.Logger) {
 	// Written in the background, so recording one never slows an order down.
 	events := platform.NewEventRecorder(shared, log)
 	logging.SetSink(log, events.Capture)
+	// How Kora, ABS and the rest have been answering, measured from our own calls. The owner is
+	// emailed through alerts, which are set up below once the mailer exists.
+	health := platform.NewProviderHealth(shared, log, events, nil)
 
 	// The settings the owner can change from the admin API: .env gives the starting
 	// values and anything changed through the API (saved in the database) wins.
@@ -135,6 +138,7 @@ func serve(cfg Config, log *slog.Logger) {
 
 	vendor := abs.New(cfg.ABSBaseURL, cfg.ABSAPIKey, cfg.ABSSandbox)
 	vendor.Log = log
+	vendor.Observe = health.Observer("abs")
 	// Only the chosen provider is built; the others' keys can stay empty.
 	var payments payment.Provider
 	var direct *http.ServeMux
@@ -142,12 +146,14 @@ func serve(cfg Config, log *slog.Logger) {
 	case "kora":
 		k := kora.New(cfg.KoraBaseURL, cfg.KoraSecretKey)
 		k.Log = log
+		k.Observe = health.Observer("kora")
 		payments = k
 		direct = http.NewServeMux()
 		k.RegisterDirectRoutes(direct)
 	default:
 		m := monnify.New(cfg.MonnifyBaseURL, cfg.MonnifyAPIKey, cfg.MonnifySecretKey, cfg.MonnifyContractCode)
 		m.Log = log
+		m.Observe = health.Observer("monnify")
 		payments = m
 		direct = http.NewServeMux()
 		m.RegisterDirectRoutes(direct)
@@ -163,6 +169,7 @@ func serve(cfg Config, log *slog.Logger) {
 			FromName: cfg.MailFromName, BounceAddress: cfg.MailBounceAddress, Sandbox: settings.Bool("mail.sandbox"),
 		})
 		mailer.Log = log
+		mailer.Observe = health.Observer("zeptomail")
 		if settings.Bool("mail.sandbox") {
 			log.Info("Config", "detail", "email in sandbox: receipts are logged, not sent (MAIL_SANDBOX=false to send)")
 		}
@@ -219,9 +226,11 @@ func serve(cfg Config, log *slog.Logger) {
 	notices := &notify.Service{Store: noticeStore, Log: log, Events: events}
 	api.Gate = notices
 
+	health.SetAlerter(alerts)
+
 	// The admin endpoints every feature shares: tokens, audit, events, who am I, the server's version.
 	admin := &platform.Admin{
-		Store: shared, Log: log, Alerts: alerts,
+		Store: shared, Log: log, Alerts: alerts, Providers: health,
 		Info: platform.ServerInfo{
 			Version: buildVersion(), GoVersion: runtime.Version(), Env: cfg.Env, PaymentProvider: cfg.PaymentProvider,
 			ABSSandbox: cfg.ABSSandbox, DirectTestRoutes: !cfg.RealMoney(), StartedAt: time.Now(),
@@ -256,6 +265,7 @@ func serve(cfg Config, log *slog.Logger) {
 	defer stop()
 
 	go api.Sweep(ctx, 5*time.Minute)
+	go health.Run(ctx)
 	go shared.RunRetention(ctx, time.Duration(cfg.EventRetentionDays)*24*time.Hour, log)
 	if cfg.BackupDir != "" {
 		go api.WatchBackups(ctx, cfg.BackupDir, time.Duration(cfg.BackupEveryMinutes)*time.Minute)
@@ -287,5 +297,6 @@ func serve(cfg Config, log *slog.Logger) {
 		emailAlerts.Wait() // and alerts being sent
 	}
 	events.Record(platform.LevelInfo, "server.stopped", "", "stopped cleanly", nil)
+	health.Close() // write the provider counts still waiting
 	events.Close() // write what is queued, before the database closes
 }

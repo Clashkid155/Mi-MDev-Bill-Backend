@@ -1812,6 +1812,30 @@
 						},
 						"description": "Counts of info, warning and error events in the last hours (1 to 720, default 24) and the latest error: for a badge such as \"2 errors today\" that opens the list. Owner and admin tokens only."
 					}
+				},
+				{
+					"name": "Provider health (admin)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/admin/providers?hours=24",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"providers"
+							],
+							"query": [
+								{
+									"key": "hours",
+									"value": "24"
+								}
+							]
+						},
+						"description": "How the outside services have been answering OUR calls, for any admin token (viewers too). hours is 1 to 168 (default 24). One entry per provider the server calls: abs, kora or monnify (whichever is the payment provider) and zeptomail (when mail is set up). state is healthy, degraded (the last call failed, or at least 2 of the last 20 did and they were a fifth or more), down (3 calls in a row failed over at least a minute; the owner gets an event and an email) or idle (not called for a day, or not since the server started and nothing stored). A call fails when there is no answer, the provider answers 5xx, or it answers 429; a 4xx answer counts as the provider working. Also calls, failures, success_percent (null with no calls), slow_calls (5 seconds or more), avg_ms, consecutive_failures, last_failure (what the last failed call was, redacted) and last_failure_at, and hours (per hour: calls, failures, avg_ms). last_call_at and last_ok_at are since the server started. This is measured from real traffic, so it shows problems a provider's own status page does not. A provider is only judged when the server calls it, so one nobody is using shows idle. ABS is also called every 15 minutes by the low balance check, but only if a low balance amount is set (alerts.low_balance_naira above 0). Counts are kept for 90 days. The same changes appear in GET /admin/events as provider.down and provider.recovered."
+					}
 				}
 			]
 		},

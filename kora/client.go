@@ -26,6 +26,11 @@ type Client struct {
 	// Log, if set, records one line per request to Kora. Reply bodies are only
 	// quoted (shortened) when a request fails.
 	Log *slog.Logger
+
+	// Observe, if set, is told how every request went: what it was (the operation name), the HTTP
+	// status (0 when there was no answer), the error if any, and how long it took. It is how the
+	// server keeps its picture of whether Kora is working.
+	Observe func(op string, status int, err error, took time.Duration)
 }
 
 func New(baseURL, secretKey string) *Client {
@@ -119,10 +124,14 @@ func (n *naira) UnmarshalJSON(b []byte) error {
 func (n naira) kobo() int64 { return int64(math.Round(float64(n) * 100)) }
 
 func (c *Client) logCall(req *http.Request, status int, reply []byte, err error, started time.Time) {
+	op := operationName(req.Method, req.URL.Path)
+	if c.Observe != nil {
+		c.Observe(op, status, err, time.Since(started))
+	}
 	if c.Log == nil {
 		return
 	}
-	tag := operationName(req.Method, req.URL.Path) + " - Kora"
+	tag := op + " - Kora"
 	took := logging.Duration(time.Since(started))
 	switch {
 	case err != nil:

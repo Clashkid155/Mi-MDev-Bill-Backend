@@ -30,6 +30,8 @@ func operationName(method, path string) string {
 		return "CreateCharge"
 	case method == "GET" && strings.Contains(path, pathChargePrefix):
 		return "GetCharge"
+	case method == "GET" && strings.HasSuffix(path, "/balances"):
+		return "GetBalances"
 	}
 	return path
 }

@@ -31,6 +31,11 @@ type Client struct {
 	// replies can hold electricity tokens and voucher pins.
 	Log *slog.Logger
 
+	// Observe, if set, is told how every request went: what it was (the operation name), the HTTP
+	// status (0 when there was no answer), the error if any, and how long it took. It is how the
+	// server keeps its picture of whether ABS is working.
+	Observe func(op string, status int, err error, took time.Duration)
+
 	catalogMu sync.Mutex
 	catalog   *Catalog
 	catalogAt time.Time
@@ -90,10 +95,14 @@ func (c *Client) sendRequest(ctx context.Context, method, path string, body io.R
 }
 
 func (c *Client) logCall(method, path string, status int, reply []byte, err error, started time.Time) {
+	op := operationName(strings.SplitN(path, "?", 2)[0])
+	if c.Observe != nil {
+		c.Observe(op, status, err, time.Since(started))
+	}
 	if c.Log == nil {
 		return
 	}
-	tag := operationName(strings.SplitN(path, "?", 2)[0]) + " - ABS"
+	tag := op + " - ABS"
 	took := logging.Duration(time.Since(started))
 	switch {
 	case err != nil:

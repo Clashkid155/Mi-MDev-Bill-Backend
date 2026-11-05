@@ -533,6 +533,27 @@ emails, meter numbers, electricity tokens and secrets before anything is stored.
 and admin tokens. It does not replace the journal: when the server is down or crashing, `journalctl` is still where the real
 error is.
 
+### Is a provider down? Provider health
+
+A provider's own status page only reports broad outages. The server instead measures what its own calls get back
+from each provider it uses (the payment provider, ABS and the mail service) and keeps the result per hour for 90 days.
+`GET /admin/providers?hours=24` (any admin token) shows, for each one, its `state`, the success rate, how many calls
+were slow (5 seconds or more), the average time, the last failure (what it was and when) and an hourly series.
+
+A call **fails** when there is no answer, the provider answers a 5xx, or it answers 429 (it is limiting us). A 4xx
+answer counts as working: the provider was there and refused the request. States: `healthy`; `degraded` (the last call
+failed, or a fifth or more of the last 20); `down` (3 calls in a row failed over at least a minute); `idle` (not called
+for a day). Going down records a `provider.down` event and emails you (at most once an hour per provider); the first good
+answer afterwards records `provider.recovered`. The emails go through ZeptoMail, so if ZeptoMail itself is the provider
+that is down you will only see the event. **A provider is only judged when the server calls it.** If nobody buys,
+nothing calls Kora, Monnify or ZeptoMail, so they show `idle` and a problem there stays unseen until the next call. ABS
+is also called every 15 minutes by the low balance check, but only when a low balance amount is set
+(`alerts.low_balance_naira` above 0; it is 0, meaning off, by default). `last_call_at` and `last_ok_at` start empty
+after each restart, the counts do not.
+
+This is how the Kora 500s of 5 November 2026 were found, when Kora's status page said everything was up: the journal
+showed five failed checks of one charge in a row (see "Reading the logs").
+
 ### Notices and maintenance mode
 
 The server can tell the apps things, and can stop new orders while you work. A **notice** is a short message

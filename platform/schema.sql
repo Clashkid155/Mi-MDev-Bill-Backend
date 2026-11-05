@@ -50,3 +50,17 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_at ON events (at);
 CREATE INDEX IF NOT EXISTS events_order ON events (order_id, id);
 CREATE INDEX IF NOT EXISTS events_level ON events (level, id);
+
+-- How the outside services (payment provider, ABS, mail) answered our calls, per provider and hour.
+-- Written by ProviderHealth once a minute and kept for 90 days.
+CREATE TABLE IF NOT EXISTS provider_stats (
+    provider      TEXT NOT NULL,
+    hour          INTEGER NOT NULL,           -- unix seconds, the start of the hour
+    calls         INTEGER NOT NULL DEFAULT 0,
+    failures      INTEGER NOT NULL DEFAULT 0, -- no answer, 5xx or 429
+    slow          INTEGER NOT NULL DEFAULT 0, -- answered, but after 5 seconds or more
+    total_ms      INTEGER NOT NULL DEFAULT 0, -- summed, for the average
+    last_error    TEXT NOT NULL DEFAULT '',   -- the last failure in this hour, redacted
+    last_error_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (provider, hour)
+) WITHOUT ROWID;

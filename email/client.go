@@ -52,6 +52,11 @@ type Client struct {
 	// Log, if set, records one line per request to ZeptoMail. Reply bodies are
 	// only quoted (shortened) on failure, never on success.
 	Log *slog.Logger
+
+	// Observe, if set, is told how every request went: what it was (the operation name), the HTTP
+	// status (0 when there was no answer), the error if any, and how long it took. It is how the
+	// server keeps its picture of whether ZeptoMail is working.
+	Observe func(op string, status int, err error, took time.Duration)
 }
 
 func New(s Settings) *Client {
@@ -180,10 +185,14 @@ func (c *Client) Send(ctx context.Context, m Message) error {
 }
 
 func (c *Client) logCall(status int, reply []byte, err error, started time.Time) {
+	op := operationName(pathSend)
+	if c.Observe != nil {
+		c.Observe(op, status, err, time.Since(started))
+	}
 	if c.Log == nil {
 		return
 	}
-	tag := operationName(pathSend) + " - ZeptoMail"
+	tag := op + " - ZeptoMail"
 	took := logging.Duration(time.Since(started))
 	switch {
 	case err != nil:

@@ -35,6 +35,11 @@ type Client struct {
 	// the access token, are never quoted.
 	Log *slog.Logger
 
+	// Observe, if set, is told how every request went: what it was (the operation name), the HTTP
+	// status (0 when there was no answer), the error if any, and how long it took. It is how the
+	// server keeps its picture of whether Monnify is working.
+	Observe func(op string, status int, err error, took time.Duration)
+
 	mu      sync.Mutex
 	token   string
 	tokenAt time.Time // when the token expires
@@ -289,10 +294,14 @@ func (c *Client) CancelInvoice(ctx context.Context, reference string) error {
 }
 
 func (c *Client) logCall(req *http.Request, status int, reply []byte, err error, started time.Time) {
+	op := operationName(req.URL.Path)
+	if c.Observe != nil {
+		c.Observe(op, status, err, time.Since(started))
+	}
 	if c.Log == nil {
 		return
 	}
-	tag := operationName(req.URL.Path) + " - Monnify"
+	tag := op + " - Monnify"
 	took := logging.Duration(time.Since(started))
 	switch {
 	case err != nil:
