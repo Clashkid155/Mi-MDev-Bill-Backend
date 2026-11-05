@@ -8,7 +8,7 @@ This is the whole path from nothing to a running, protected, backed up backend. 
 * **Litestream** copying every database change to Cloudflare R2 within about a second,
 * encrypted hourly snapshots in R2 as a second, independent backup.
 
-Replace `api.example.com` with your own name everywhere.
+The server's address is `api.dizztech.com`. If it ever moves, search this guide for it.
 
 ## What runs where
 
@@ -295,14 +295,14 @@ scp deploy/cloudflare-firewall.sh bills:/tmp/ && ssh bills 'sudo bash /tmp/cloud
 Try `DRY_RUN=1` first to see what it would do. Port 22 (SSH) is untouched. Run it again if Cloudflare announces
 a change to its addresses.
 
-After that, check `https://api.example.com/healthz` works, and that `https://SERVER_IP/healthz` does not answer.
+After that, check `https://api.dizztech.com/healthz` works, and that `https://SERVER_IP/healthz` does not answer.
 
-Then, in the Kora dashboard, set the webhook URL to `https://api.example.com/webhooks/kora`. Point the
-Flutter app at `https://api.example.com`. If the webhooks stop arriving, look in Cloudflare under Security,
+Then, in the Kora dashboard, set the webhook URL to `https://api.dizztech.com/webhooks/kora`. Point the
+Flutter app at `https://api.dizztech.com`. If the webhooks stop arriving, look in Cloudflare under Security,
 Events for blocked requests from Kora's or ABS's addresses.
 
 **Know when it is down.** Make a free monitor (UptimeRobot, or a second healthchecks.io check) that
-requests `https://api.example.com/healthz` every 5 minutes and emails you when it fails.
+requests `https://api.dizztech.com/healthz` every 5 minutes and emails you when it fails.
 
 ## 7. Backups
 
@@ -618,7 +618,7 @@ systemd or Caddy behave; the live runs showed that. `shellcheck deploy/*.sh` was
 
 ## Checklist before real customers
 
-- [ ] `curl https://api.example.com/healthz` works, and `https://SERVER_IP/healthz` does not
+- [ ] `curl https://api.dizztech.com/healthz` works, and `https://SERVER_IP/healthz` does not
 - [ ] `/admin/orders` answers 401 without the token and 200 with it; five wrong tokens block the address
 - [ ] `/abs/catalog` answers 404 (the direct provider routes are off with real money)
 - [ ] `go run ./tools/abscheck` (with ABS_API_KEY set) says ABS still matches what the backend expects; run it monthly too
