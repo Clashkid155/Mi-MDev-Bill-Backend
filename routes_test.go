@@ -451,3 +451,14 @@ func TestProviderHealthIsAnAdminRoute(t *testing.T) {
 		t.Errorf("with the token: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestResolvingAnOrderIsAnAdminWrite(t *testing.T) {
+	h, _ := testServer(t, Config{AdminToken: "s3cret"}, nil)
+	if code := do(h, "POST", "/admin/orders/MDEV_x/resolve", "", "192.0.2.70:1000").Code; code != 401 {
+		t.Errorf("with no token: %d, want 401", code)
+	}
+	// With the token the route exists: the order just is not there.
+	if code := do(h, "POST", "/admin/orders/MDEV_x/resolve", "Bearer s3cret", "192.0.2.71:1000").Code; code != 400 {
+		t.Errorf("with the token and no outcome: %d, want 400", code)
+	}
+}

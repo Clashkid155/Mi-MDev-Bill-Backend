@@ -138,8 +138,11 @@ func (s *Service) alertRefundDue(o Order, why string) {
 // alertPending: ABS gave no clear answer, so nobody knows whether the customer got what they paid for.
 func (s *Service) alertPending(o Order, why string) {
 	s.alert("pending:"+o.ID, refundThrottle, fmt.Sprintf("Outcome unknown: %s, order %s", formatNaira(o.Due()), o.ID),
-		summary(o)+"\nABS gave no clear answer: "+why+"\n\nThe order stays PENDING. Check the transaction in the ABS dashboard (look for the recipient and amount above); "+
-			"if it was delivered nothing more is needed, otherwise the customer is owed a refund.\n")
+		summary(o)+"\nABS gave no clear answer: "+why+"\n\nThe order stays PENDING until you say what happened, and the server never buys it again by itself. Check the transaction in the ABS dashboard "+
+			"(look for the recipient and amount above, and give a slow one a few minutes: ABS sometimes delivers late), then close the order:\n"+
+			"  POST /admin/orders/{id}/resolve  {\"outcome\": \"delivered\"}   if the customer got it (they are sent their receipt)\n"+
+			"  POST /admin/orders/{id}/resolve  {\"outcome\": \"failed\"}      if not: it becomes a refund due, and the refund steps follow\n"+
+			"Add \"note\": \"...\" to say what you found.\n")
 }
 
 // WatchBalance checks the ABS wallet and alerts when it falls below the

@@ -196,7 +196,24 @@ Start it after the backups are set up (step 7), so Litestream is running from th
 
 In production the server refuses to start if `ADMIN_TOKEN`, `ABS_API_KEY` or the payment provider's keys are
 missing, or if `ABS_SANDBOX` is not `false` (with ABS in sandbox, customers would pay and receive nothing), so a half
-finished setup tells you at once. There is no ABS webhook secret to set: nothing uses ABS webhooks.
+finished setup tells you at once.
+
+### ABS webhooks (optional)
+
+ABS can tell the server when a purchase settles or fails. For now the server only **saves** these messages (see them with
+`GET /admin/webhooks?provider=abs`); it does not settle orders from them, so nothing depends on this. To switch it on:
+
+1. In the ABS dashboard, open the webhooks section and add an endpoint with the address
+   `https://api.dizztech.com/webhooks/abs`. Subscribe to `transaction.settled`, `transaction.failed` and `refund.issued`
+   (the two `wallet.*` events add nothing the server uses). ABS then shows that endpoint's **signing secret, once**.
+2. At once, on the server (`ssh bills`, then `sudo -i`), add the line `ABS_WEBHOOK_SECRET=<that secret>` to `/etc/bills/env`
+   (type it yourself, never paste it anywhere else) and run `systemctl restart bills`.
+3. Until step 2 is done the server answers 401 to every ABS message, and ABS **disables an endpoint after 20 failed
+   deliveries** (it retries 7 times over about a day). Messages only come when there is a purchase, so doing steps 1 and 2
+   within a few minutes is safe; if ABS does disable it, re-enable it in the dashboard.
+
+The server checks `X-ABS-Signature` (HMAC-SHA256 over the timestamp, a dot and the body) and ignores messages more than five
+minutes old. Without the secret set, a production server refuses every ABS webhook.
 
 ### Admin tokens for the dashboard app
 
@@ -532,6 +549,27 @@ emails, meter numbers, electricity tokens and secrets before anything is stored.
 `GET /admin/events` (filter by level, kind, order or time) and `GET /admin/events/summary` (a count for a badge), for owner
 and admin tokens. It does not replace the journal: when the server is down or crashing, `journalctl` is still where the real
 error is.
+
+### Orders that need you: PENDING and refunds
+
+Most orders finish on their own. Two kinds wait for you, and both show in `GET /admin/orders?status=PENDING,REFUND_DUE`
+and arrive as an email.
+
+**`PENDING`: the outcome is unknown.** The customer paid, and the call to ABS timed out, failed with a 5xx or came back
+unreadable. The server cannot know whether the customer got their data, and buying again could charge them twice, so it
+never retries by itself. ABS sometimes delivers a minute or two *after* the timeout. To close the order:
+
+1. Look in the ABS dashboard history for the recipient, the amount and the time (the email lists them), and check the SIM
+   if it is your own number.
+2. Say what happened: `POST /admin/orders/{id}/resolve` with `{"outcome": "delivered"}` (the order becomes `SUCCESS` and
+   the customer is emailed their receipt) or `{"outcome": "failed"}` (it becomes `REFUND_DUE`). Add `"note"` to say what you
+   found. It moves no money and never calls ABS, and a second click or a late answer changes nothing (409). An electricity
+   order marked delivered sends no receipt, because the token only comes in ABS's reply: send it to the customer yourself.
+
+**`REFUND_DUE`: the customer is owed money.** Send it back from the Kora dashboard (find the payment by the order id; you may
+deduct the costs), then record it with `POST /admin/orders/{id}/refunded` so the app stops saying it is waiting.
+
+ABS's webhook receiver (`POST /webhooks/abs`) only saves what ABS sends, so it does not settle orders yet.
 
 ### Is a provider down? Provider health
 

@@ -1240,6 +1240,40 @@
 					}
 				},
 				{
+					"name": "Resolve a pending order (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/orders/{{orderId}}/resolve",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"orders",
+								"{{orderId}}",
+								"resolve"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"outcome\": \"delivered\",\n  \"note\": \"ABS shows it settled and the data arrived\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "For an order in PENDING: the customer paid, but ABS never gave a clear answer (a timeout, a 5xx, an unreadable reply), so the server cannot know whether they got what they paid for, and it never buys again by itself. You check with ABS (its dashboard history: recipient, amount, time; give a slow one a few minutes, ABS sometimes delivers late) and then say what happened. outcome \"delivered\": the order becomes SUCCESS and the customer is emailed their receipt (an ELECTRICITY order gets no receipt, because the token only comes in ABS's reply: send it yourself). outcome \"failed\": the order becomes FAILED and then REFUND_DUE; send the money back (Kora dashboard) and finish with Mark refunded. note (optional, up to 500 characters) goes into the event and the audit log. Owner and admin tokens only. 409 if the order is not PENDING (including when it was already resolved: the answer says what it is now), 404 for an unknown order, 400 for an outcome other than delivered or failed. Orders waiting for a decision: GET /admin/orders?status=PENDING. It moves no money and never calls ABS."
+					}
+				},
+				{
 					"name": "Mark refunded (admin)",
 					"request": {
 						"method": "POST",

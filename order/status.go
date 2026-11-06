@@ -14,7 +14,7 @@ const (
 	StatusOverpaid        Status = "OVERPAID"       // more than the price arrived; not vended
 	StatusVending         Status = "VENDING"
 	StatusSuccess         Status = "SUCCESS"
-	StatusPending         Status = "PENDING" // vendor outcome unknown; reconciler resolves
+	StatusPending         Status = "PENDING" // vendor outcome unknown; the owner resolves it: POST /admin/orders/{id}/resolve
 	StatusFailed          Status = "FAILED"
 	StatusRefundDue       Status = "REFUND_DUE"
 	StatusRefunded        Status = "REFUNDED"

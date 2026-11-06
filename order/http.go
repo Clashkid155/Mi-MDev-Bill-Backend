@@ -73,6 +73,7 @@ func (a *API) Routes() http.Handler {
 //	GET /admin/orders?status=PENDING,REFUND_DUE&limit=50
 //	GET /admin/webhooks?provider=monnify&limit=20    (raw bodies as received)
 //	POST /admin/orders/{id}/refunded {"refund_fee_kobo":5000,"refund_amount_kobo":983875,"note":"..."}  (after sending the money back by hand)
+//	POST /admin/orders/{id}/resolve {"outcome":"delivered"|"failed","note":"..."}  (a PENDING order, once you have checked with ABS what happened)
 //	POST /admin/expenses {"category":"hosting","label":"Server","amount_kobo":1500000}; GET /admin/expenses?from=&to=; DELETE /admin/expenses/{id}
 //	GET /admin/settings; PUT /admin/settings/{key} {"value": ...}; DELETE /admin/settings/{key}; GET /admin/settings/history
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
@@ -92,6 +93,7 @@ func (a *API) RegisterAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/orders", a.listOrders)
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
 	mux.HandleFunc("POST /admin/orders/{id}/refunded", a.markRefunded)
+	mux.HandleFunc("POST /admin/orders/{id}/resolve", a.resolveOrder)
 	mux.HandleFunc("GET /admin/settings", a.listSettings)
 	mux.HandleFunc("GET /admin/settings/history", a.settingsHistory)
 	mux.HandleFunc("PUT /admin/settings/{key}", a.putSetting)
@@ -278,6 +280,48 @@ func adminViewOf(o Order) adminOrderView {
 // refund_amount_kobo is what was sent back to the customer; leave it out (or 0) for
 // the whole total, or give the smaller amount when the costs were deducted.
 // payment_fee_returned says the provider gave its fee on the original payment back.
+// resolveOrder is POST /admin/orders/{id}/resolve {"outcome":"delivered"|"failed","note":"..."}: the owner
+// has checked with ABS what became of an order whose outcome the server could not tell (PENDING).
+// "delivered" makes it SUCCESS; "failed" makes it REFUND_DUE. See Service.Resolve.
+func (a *API) resolveOrder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Outcome string `json:"outcome"`
+		Note    string `json:"note"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil || json.Unmarshal(body, &req) != nil {
+		reply.Fail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	req.Outcome = strings.ToLower(strings.TrimSpace(req.Outcome))
+	req.Note = strings.TrimSpace(req.Note)
+	if req.Outcome != OutcomeDelivered && req.Outcome != OutcomeFailed {
+		reply.Fail(w, http.StatusBadRequest, `outcome must be "delivered" or "failed"`)
+		return
+	}
+	if len([]rune(req.Note)) > 500 {
+		reply.Fail(w, http.StatusBadRequest, "note must be at most 500 characters")
+		return
+	}
+	by := "unknown"
+	if actor, ok := platform.ActorFrom(r.Context()); ok {
+		by = actor.Name
+	}
+	o, err := a.Resolve(r.Context(), r.PathValue("id"), req.Outcome, req.Note, by)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		reply.Fail(w, http.StatusNotFound, "order not found")
+	case errors.Is(err, ErrNotPending):
+		reply.Fail(w, http.StatusConflict, "only a PENDING order can be resolved; this one is "+string(o.Status))
+	case err != nil:
+		a.Log.Error("Resolve - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+	default:
+		a.Log.Info("Resolve - API", "detail", fmt.Sprintf("order %s marked %s by %s", o.ID, req.Outcome, by))
+		reply.OK(w, http.StatusOK, adminViewOf(o))
+	}
+}
+
 func (a *API) markRefunded(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefundFeeKobo    int64  `json:"refund_fee_kobo"`
