@@ -25,6 +25,11 @@ type Client struct {
 	apiKey  string
 	sandbox bool // ABS validates everything but neither charges nor vends
 	http    *http.Client
+	// spend is for purchase calls only. ABS waits about a minute for the provider before it answers
+	// and tells integrators to allow at least 90 seconds; giving up sooner leaves a purchase that
+	// ABS goes on to complete with an unknown outcome (the order sits PENDING). Nobody waits on it:
+	// purchases run in the background.
+	spend *http.Client
 
 	// Log, if set, records one line per request to ABS. Reply bodies are only
 	// quoted (shortened) when a request fails, never on success, because spend
@@ -46,8 +51,23 @@ func New(baseURL, apiKey string, sandbox bool) *Client {
 		baseURL: baseURL,
 		apiKey:  apiKey,
 		sandbox: sandbox,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    &http.Client{Timeout: requestTimeout},
+		spend:   &http.Client{Timeout: spendTimeout},
 	}
+}
+
+const (
+	requestTimeout = 30 * time.Second // catalog, balance, meter checks and lookups
+	spendTimeout   = 90 * time.Second // purchases: see Client.spend
+)
+
+// isSpend says whether path is a purchase (the only calls that take the longer timeout).
+func isSpend(path string) bool {
+	switch path {
+	case pathBuyAirtime, pathBuyData, pathBuyElectric, pathBuyVoucher:
+		return true
+	}
+	return false
 }
 
 type State string
@@ -79,8 +99,12 @@ func (c *Client) sendRequest(ctx context.Context, method, path string, body io.R
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	hc := c.http
+	if isSpend(path) {
+		hc = c.spend
+	}
 	started := time.Now()
-	resp, err := c.http.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		c.logCall(method, path, 0, nil, err, started)
 		return 0, nil, err

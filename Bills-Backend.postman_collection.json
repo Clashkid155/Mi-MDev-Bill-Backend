@@ -26,6 +26,10 @@
 			"value": ""
 		},
 		{
+			"key": "requestId",
+			"value": ""
+		},
+		{
 			"key": "adminToken",
 			"value": ""
 		},
@@ -202,14 +206,14 @@
 						},
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"network\": \"MTNAIR6TFD\",\n  \"phone\": \"08012345678\",\n  \"amount_naira\": 100\n}",
+							"raw": "{\n  \"network\": \"MTNAIR6TFD\",\n  \"phone\": \"08012345678\",\n  \"amount_naira\": 100,\n  \"request_id\": \"test-{{$guid}}\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
 								}
 							}
 						},
-						"description": "network is an AIRTIME product trackid. Minimum 50 naira. The reply has sandbox:true unless ABS_SANDBOX=false."
+						"description": "network is an AIRTIME product trackid. Minimum 50 naira. The reply has sandbox:true unless ABS_SANDBOX=false. request_id is optional: our own reference, sent to ABS and echoed back if ABS keeps it."
 					}
 				},
 				{
@@ -234,14 +238,14 @@
 						},
 						"body": {
 							"mode": "raw",
-							"raw": "{\n  \"network\": \"MTN56TFD\",\n  \"plan\": \"6BO1H\",\n  \"phone\": \"08012345678\"\n}",
+							"raw": "{\n  \"network\": \"MTN56TFD\",\n  \"plan\": \"6BO1H\",\n  \"phone\": \"08012345678\",\n  \"request_id\": \"test-{{$guid}}\"\n}",
 							"options": {
 								"raw": {
 									"language": "json"
 								}
 							}
 						},
-						"description": "network is a DATA network trackid (different from the airtime id) and plan is a plan trackid."
+						"description": "network is a DATA network trackid (different from the airtime id) and plan is a plan trackid. request_id is optional: our own reference, sent to ABS and echoed back if ABS keeps it."
 					}
 				},
 				{
@@ -1270,7 +1274,7 @@
 								}
 							}
 						},
-						"description": "For an order in PENDING: the customer paid, but ABS never gave a clear answer (a timeout, a 5xx, an unreadable reply), so the server cannot know whether they got what they paid for, and it never buys again by itself. You check with ABS (its dashboard history: recipient, amount, time; give a slow one a few minutes, ABS sometimes delivers late) and then say what happened. outcome \"delivered\": the order becomes SUCCESS and the customer is emailed their receipt (an ELECTRICITY order gets no receipt, because the token only comes in ABS's reply: send it yourself). outcome \"failed\": the order becomes FAILED and then REFUND_DUE; send the money back (Kora dashboard) and finish with Mark refunded. note (optional, up to 500 characters) goes into the event and the audit log. Owner and admin tokens only. 409 if the order is not PENDING (including when it was already resolved: the answer says what it is now), 404 for an unknown order, 400 for an outcome other than delivered or failed. Orders waiting for a decision: GET /admin/orders?status=PENDING. It moves no money and never calls ABS."
+						"description": "For an order in PENDING: the customer paid, but ABS never gave a clear answer (a timeout, a 5xx, an unreadable reply), so the server cannot know whether they got what they paid for, and it never buys again by itself. You check with ABS (its dashboard history: recipient, amount, time; give a slow one a few minutes, ABS sometimes delivers late) and then say what happened. outcome \"delivered\": the order becomes SUCCESS and the customer is emailed their receipt (an ELECTRICITY order gets no receipt, because the token only comes in ABS's reply: send it yourself). outcome \"failed\": the order becomes FAILED and then REFUND_DUE; send the money back (Kora dashboard) and finish with Mark refunded. note (optional, up to 500 characters) goes into the event and the audit log. Owner and admin tokens only. 409 if the order is not PENDING (including when it was already resolved: the answer says what it is now), 404 for an unknown order, 400 for an outcome other than delivered or failed. Orders waiting for a decision: GET /admin/orders?status=PENDING. It moves no money and never calls ABS. ABS's own webhook (transaction.settled or transaction.failed) closes a PENDING order by itself when it fits exactly one order, so use this for the rest."
 					}
 				},
 				{
@@ -2281,7 +2285,7 @@
 								"buy_airtime.php"
 							]
 						},
-						"description": "airtimetid is the network id from the catalog. amount is whole naira, minimum 50. sandbox=1 = validate only. Remove the sandbox row for a REAL purchase that spends your wallet.",
+						"description": "airtimetid is the network id from the catalog. amount is whole naira, minimum 50. sandbox=1 = validate only. Remove the sandbox row for a REAL purchase that spends your wallet. request_id is OUR reference for the order (up to 191 characters, unique per order; the server sends the order id here on every real purchase). ABS's docs list it for the Partner API and ask for it on every purchase, but not in the Direct field tables, so this checks that the Direct endpoint accepts it: a sandbox answer of status true means it is harmless. Whether ABS keeps it shows after a REAL purchase, in the webhook (data.request_id, see GET /admin/webhooks?provider=abs) and in the lookup by request_id below.",
 						"auth": {
 							"type": "bearer",
 							"bearer": [
@@ -2311,6 +2315,11 @@
 									"type": "text"
 								},
 								{
+									"key": "request_id",
+									"value": "test-{{$guid}}",
+									"type": "text"
+								},
+								{
 									"key": "sandbox",
 									"value": "1",
 									"type": "text"
@@ -2336,7 +2345,7 @@
 								"buy_data.php"
 							]
 						},
-						"description": "airtimetid is the network id and cardunittid the plan id (the bouquet trackid) from the catalog. sandbox=1 = validate only. Remove it for a REAL purchase.",
+						"description": "airtimetid is the network id and cardunittid the plan id (the bouquet trackid) from the catalog. sandbox=1 = validate only. Remove it for a REAL purchase. request_id is OUR reference for the order (up to 191 characters, unique per order; the server sends the order id here on every real purchase). ABS's docs list it for the Partner API and ask for it on every purchase, but not in the Direct field tables, so this checks that the Direct endpoint accepts it: a sandbox answer of status true means it is harmless. Whether ABS keeps it shows after a REAL purchase, in the webhook (data.request_id, see GET /admin/webhooks?provider=abs) and in the lookup by request_id below.",
 						"auth": {
 							"type": "bearer",
 							"bearer": [
@@ -2363,6 +2372,11 @@
 								{
 									"key": "phoneno",
 									"value": "{{testPhone}}",
+									"type": "text"
+								},
+								{
+									"key": "request_id",
+									"value": "test-{{$guid}}",
 									"type": "text"
 								},
 								{
@@ -2463,6 +2477,32 @@
 								}
 							]
 						}
+					}
+				},
+				{
+					"name": "Look up an order by our request_id (Partner API)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{absBaseUrl}}/api/partner/v1/transaction.php?request_id={{requestId}}",
+							"host": [
+								"{{absBaseUrl}}"
+							],
+							"path": [
+								"api",
+								"partner",
+								"v1",
+								"transaction.php"
+							],
+							"query": [
+								{
+									"key": "request_id",
+									"value": "{{requestId}}"
+								}
+							]
+						},
+						"description": "Looks an order up by OUR reference (the request_id sent when buying; the server uses the order id, like MDEV_8N2WJV4YD6TVE1WK) instead of ABS's own order id. ABS says to use this when a purchase got no reply: it answers successful, Processing, failed or Refund, and if it says no transaction was found, wait two minutes and ask again before concluding the order was never created. Set the variable requestId first. Same access rules as the lookup by ident (Partner endpoints: IP whitelist and a saved website, see deploy/README.md section 3). If it finds a REAL purchase made with the new version, ABS keeps request_id on Direct purchases. Checked on 2026-11-06: it found nothing, so ABS ignores request_id on Direct purchases and the server matches ABS's webhooks by recipient and cost instead."
 					}
 				},
 				{

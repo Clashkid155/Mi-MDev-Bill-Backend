@@ -52,13 +52,31 @@ type Event struct {
 	ConfirmedAt string // events can arrive out of order: newest confirmed_at wins
 }
 
+// text reads a JSON string or number as text. ABS sends status and amount as strings ("1", "99"), but a
+// number there ("status": 1) must not make the whole message unreadable.
+type text string
+
+func (t *text) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*t = text(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*t = text(n.String())
+	return nil
+}
+
 func ParseWebhook(h http.Header, body []byte) (Event, error) {
 	var b struct {
 		Event string `json:"event"`
 		Data  struct {
 			OrderID     string `json:"order_id"`
-			Status      string `json:"status"`
-			Amount      string `json:"amount"`
+			Status      text   `json:"status"`
+			Amount      text   `json:"amount"`
 			Recipient   string `json:"recipient"`
 			Message     string `json:"message"`
 			ConfirmedAt string `json:"confirmed_at"`
@@ -69,7 +87,7 @@ func ParseWebhook(h http.Header, body []byte) (Event, error) {
 	}
 	return Event{
 		Name: b.Event, DeliveryID: h.Get("X-ABS-Delivery"),
-		OrderID: b.Data.OrderID, Status: b.Data.Status, Amount: b.Data.Amount,
+		OrderID: b.Data.OrderID, Status: string(b.Data.Status), Amount: string(b.Data.Amount),
 		Recipient: b.Data.Recipient, Message: b.Data.Message, ConfirmedAt: b.Data.ConfirmedAt,
 	}, nil
 }

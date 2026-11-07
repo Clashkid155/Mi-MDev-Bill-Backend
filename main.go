@@ -256,7 +256,7 @@ func serve(cfg Config, log *slog.Logger) {
 		Handler:           routes(cfg, log, api, admin, notices, directRoutes),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      60 * time.Second, // the slowest call out is ABS at 30s
+		WriteTimeout:      60 * time.Second, // the slowest call a request waits on is ABS at 30s (purchases take up to 90s but run in the background)
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}

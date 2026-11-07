@@ -56,8 +56,11 @@ type Order struct {
 	CheckoutURL  string
 	ExpiresAt    time.Time
 	VendResponse string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// VendorRef is ABS's own id for the purchase (the "order_id" in its webhooks), known only once a
+	// webhook has been matched to the order. ABS's purchase reply carries none.
+	VendorRef string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Due is what the customer has to pay: the total, or for an order made before
@@ -119,7 +122,7 @@ func NewStore(db *sql.DB) (*Store, error) {
 		return nil, err
 	}
 	// Databases created before these columns existed need them added.
-	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name", "plan_note"} {
+	for _, column := range []string{"plan_id", "customer_name", "network_name", "plan_name", "plan_note", "vendor_ref"} {
 		if err := addColumnIfMissing(db, "orders", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			return nil, err
 		}
@@ -131,6 +134,16 @@ func NewStore(db *sql.DB) (*Store, error) {
 	}
 	if err := addColumnIfMissing(db, "orders", "refund_note", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
+	}
+	// Matching an ABS webhook looks orders up by ABS's id or by recipient, so both are indexed (created
+	// after the columns above, which an older database may only just have gained).
+	for _, index := range []string{
+		`CREATE INDEX IF NOT EXISTS orders_vendor_ref ON orders (vendor_ref)`,
+		`CREATE INDEX IF NOT EXISTS orders_recipient ON orders (recipient, created_at)`,
+	} {
+		if _, err := db.Exec(index); err != nil {
+			return nil, err
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -192,7 +205,7 @@ func newID() string {
 var idGen = newID
 
 const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, refund_fee_kobo, refund_amount_kobo, refund_note, refunded_at, customer_email, customer_name, network_name, plan_name, plan_note, status,
-	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response,
+	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response, vendor_ref,
 	created_at, updated_at`
 
 func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
@@ -201,7 +214,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var expires, created, updated, refunded int64
 	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CostKobo, &o.FeeKobo, &o.TotalKobo, &o.PaymentFeeKobo, &o.RefundFeeKobo, &o.RefundAmountKobo, &o.RefundNote, &refunded, &o.CustomerEmail,
 		&o.CustomerName, &o.NetworkName, &o.PlanName, &o.PlanNote, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
-		&expires, &o.VendResponse, &created, &updated)
+		&expires, &o.VendResponse, &o.VendorRef, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, ErrNotFound
 	}

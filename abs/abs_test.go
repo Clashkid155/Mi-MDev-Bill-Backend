@@ -35,7 +35,7 @@ func TestAirtimeSendsFormFields(t *testing.T) {
 			t.Errorf("unexpected request %s %v", r.URL.Path, r.Form)
 		}
 	})
-	if res := c.Airtime(context.Background(), "MTNAIR6TFD", "08012345678", 10000); res.State != Success {
+	if res := c.Airtime(context.Background(), "MTNAIR6TFD", "08012345678", 10000, ""); res.State != Success {
 		t.Fatalf("%+v", res)
 	}
 }
@@ -48,7 +48,7 @@ func TestSandboxFlag(t *testing.T) {
 		}
 	})
 	c.sandbox = true
-	c.Data(context.Background(), "MTN56TFD", "6BO1H", "0801")
+	c.Data(context.Background(), "MTN56TFD", "6BO1H", "0801", "")
 }
 
 func TestOutcomeClassification(t *testing.T) {
@@ -68,7 +68,7 @@ func TestOutcomeClassification(t *testing.T) {
 	}
 	for _, tc := range cases {
 		c := fakeABS(t, tc.status, tc.body, nil)
-		if res := c.Data(context.Background(), "MTN56TFD", "6BO1H", "0801"); res.State != tc.want {
+		if res := c.Data(context.Background(), "MTN56TFD", "6BO1H", "0801", ""); res.State != tc.want {
 			t.Errorf("%s: got %s want %s", tc.name, res.State, tc.want)
 		}
 	}
@@ -76,7 +76,7 @@ func TestOutcomeClassification(t *testing.T) {
 
 func TestNetworkErrorIsProcessing(t *testing.T) {
 	c := New("http://127.0.0.1:1", "key", false) // connection refused
-	if res := c.Data(context.Background(), "n", "p", "0801"); res.State != Processing {
+	if res := c.Data(context.Background(), "n", "p", "0801", ""); res.State != Processing {
 		t.Fatalf("a network error must be PROCESSING, got %s", res.State)
 	}
 }
@@ -84,9 +84,9 @@ func TestNetworkErrorIsProcessing(t *testing.T) {
 func TestInvalidOrdersNeverReachABS(t *testing.T) {
 	c := New("http://127.0.0.1:1", "key", false)
 	for name, res := range map[string]Result{
-		"fractional naira": c.Airtime(context.Background(), "n", "0801", 10050),
-		"zero":             c.Electricity(context.Background(), "d", "123", 0),
-		"31 vouchers":      c.Voucher(context.Background(), "n", "u", 31),
+		"fractional naira": c.Airtime(context.Background(), "n", "0801", 10050, ""),
+		"zero":             c.Electricity(context.Background(), "d", "123", 0, ""),
+		"31 vouchers":      c.Voucher(context.Background(), "n", "u", 31, ""),
 	} {
 		if res.State != Failed {
 			t.Errorf("%s: got %s, want FAILED", name, res.State)
@@ -155,7 +155,7 @@ func TestSystemDataToleratesOddErrorField(t *testing.T) {
 		if err != nil || string(data) != `{"airtimeproviders":[]}` {
 			t.Errorf("error=%s: %v %s", errField, err, data)
 		}
-		if res := fakeABS(t, 200, body, nil).Data(context.Background(), "n", "p", "0801"); res.State != Success {
+		if res := fakeABS(t, 200, body, nil).Data(context.Background(), "n", "p", "0801", ""); res.State != Success {
 			t.Errorf("error=%s: purchase reported %s", errField, res.State)
 		}
 	}

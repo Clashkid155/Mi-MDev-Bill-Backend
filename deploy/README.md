@@ -200,8 +200,9 @@ finished setup tells you at once.
 
 ### ABS webhooks (optional)
 
-ABS can tell the server when a purchase settles or fails. For now the server only **saves** these messages (see them with
-`GET /admin/webhooks?provider=abs`); it does not settle orders from them, so nothing depends on this. To switch it on:
+ABS can tell the server when a purchase settles or fails. The server **saves** every message (see them with
+`GET /admin/webhooks?provider=abs`) and uses `transaction.settled` and `transaction.failed` to close `PENDING` orders (see
+"Orders that need you"). Nothing else depends on it, so the server works without it, but a slow purchase then waits for you. To switch it on:
 
 1. In the ABS dashboard, open the webhooks section and add an endpoint with the address
    `https://api.dizztech.com/webhooks/abs`. Subscribe to `transaction.settled`, `transaction.failed` and `refund.issued`
@@ -557,7 +558,8 @@ and arrive as an email.
 
 **`PENDING`: the outcome is unknown.** The customer paid, and the call to ABS timed out, failed with a 5xx or came back
 unreadable. The server cannot know whether the customer got their data, and buying again could charge them twice, so it
-never retries by itself. ABS sometimes delivers a minute or two *after* the timeout. To close the order:
+never retries by itself. ABS sometimes delivers a minute or two *after* the timeout, and when it does, its webhook closes
+the order for you (see below). If no webhook has done so, close it yourself:
 
 1. Look in the ABS dashboard history for the recipient, the amount and the time (the email lists them), and check the SIM
    if it is your own number.
@@ -569,7 +571,28 @@ never retries by itself. ABS sometimes delivers a minute or two *after* the time
 **`REFUND_DUE`: the customer is owed money.** Send it back from the Kora dashboard (find the payment by the order id; you may
 deduct the costs), then record it with `POST /admin/orders/{id}/refunded` so the app stops saying it is waiting.
 
-ABS's webhook receiver (`POST /webhooks/abs`) only saves what ABS sends, so it does not settle orders yet.
+**Why it happens, and how it is reduced.** ABS waits about a minute for the provider before it answers a purchase and
+tells integrators to allow at least 90 seconds, so purchases are given 90 seconds (everything else keeps 30). A purchase
+that took 32 seconds once left an order pending when the limit was 30. Every purchase also carries the order id as ABS's
+`request_id` (our own reference) in case ABS links it to its order. Checked on 2026-11-06: ABS accepts the field and
+ignores it on Direct purchases (its webhook shows `"request_id": null` and its lookup finds nothing), so it is sent in case
+ABS fixes that, and nothing relies on it.
+
+**ABS's webhook settles `PENDING` orders.** ABS's purchase reply carries no id for the purchase, so a webhook is matched to
+an order by what it says: the recipient and the amount ABS charged us (the order's cost), among the orders that reached ABS
+in the last 6 hours. The server acts only when the message fits **exactly one** order that no other message has claimed:
+
+* `transaction.settled` on a `PENDING` order: it becomes `SUCCESS` and the customer is emailed their receipt, as with
+  "delivered" above. `transaction.failed`: it becomes `REFUND_DUE` and you get the refund email. The order keeps ABS's own
+  id as `vendor_reference` (in `GET /admin/orders`), so you can find it in the ABS dashboard.
+* A message for an order that is already `SUCCESS` or settled only adds that `vendor_reference`.
+* If it fits several orders (say two identical purchases for the same number, one delivered and one unknown), none is changed
+  and an `abs.ambiguous` event lists them with ABS's id (in the event's detail): close the right one by hand. If it fits
+  none, an `abs.unmatched` event says so (normal for something you bought in ABS's own dashboard).
+* If ABS and the order disagree (ABS says delivered but the order is `REFUND_DUE` or `FAILED`, or ABS says failed but the
+  order is `SUCCESS`), nothing is changed and you get an `abs.conflict` event and an email. Do not send a refund for an order
+  ABS says it delivered.
+* A message for an order being bought at that moment is answered 503 and ABS sends it again shortly.
 
 ### Is a provider down? Provider health
 

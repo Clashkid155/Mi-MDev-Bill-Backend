@@ -238,15 +238,15 @@ func (s *Service) ValidateMeter(ctx context.Context, serviceID, meter string) (j
 	return details, err
 }
 
-// buy sends the order to ABS.
+// buy sends the order to ABS, with the order id as our own reference (ABS echoes it back as request_id).
 func (s *Service) buy(ctx context.Context, o Order) abs.Result {
 	switch o.Kind {
 	case KindAirtime:
-		return s.Vendor.Airtime(ctx, o.Network, o.Recipient, o.AmountKobo)
+		return s.Vendor.Airtime(ctx, o.Network, o.Recipient, o.AmountKobo, o.ID)
 	case KindData:
-		return s.Vendor.Data(ctx, o.Network, o.PlanID, o.Recipient)
+		return s.Vendor.Data(ctx, o.Network, o.PlanID, o.Recipient, o.ID)
 	case KindElectricity:
-		return s.Vendor.Electricity(ctx, o.Network, o.Recipient, o.AmountKobo)
+		return s.Vendor.Electricity(ctx, o.Network, o.Recipient, o.AmountKobo, o.ID)
 	}
 	return abs.Result{State: abs.Failed, Message: "unknown order kind " + o.Kind}
 }

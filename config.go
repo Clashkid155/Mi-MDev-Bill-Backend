@@ -235,8 +235,9 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("KORA_SECRET_KEY is required when PAYMENT_PROVIDER=kora")
 	}
 	if c.IsProduction() {
-		// ABS_WEBHOOK_SECRET is not required: nothing acts on ABS webhooks (the handler only
-		// records them), and with real money in use they are refused unless a secret is set.
+		// ABS_WEBHOOK_SECRET is not required: the server works without ABS webhooks (they only settle
+		// orders whose outcome ABS never answered), and with real money in use they are refused
+		// unless a secret is set.
 		required := map[string]string{
 			"ABS_API_KEY": c.ABSAPIKey,
 		}

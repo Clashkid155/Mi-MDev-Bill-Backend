@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS orders (
     checkout_url    TEXT NOT NULL DEFAULT '',
     expires_at      INTEGER NOT NULL,          -- unix seconds
     vend_response   TEXT NOT NULL DEFAULT '',  -- raw ABS reply; may hold tokens/pins
+    vendor_ref      TEXT NOT NULL DEFAULT '',  -- ABS's own id for the purchase (BD.../BA...), learned from its webhook; '' until then
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
 );

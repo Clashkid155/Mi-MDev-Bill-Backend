@@ -63,11 +63,12 @@ func (c *Client) handleAirtime(w http.ResponseWriter, r *http.Request) {
 		Network     string `json:"network"`
 		Phone       string `json:"phone"`
 		AmountNaira int64  `json:"amount_naira"`
+		RequestID   string `json:"request_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	c.reply(w, c.Airtime(r.Context(), in.Network, in.Phone, in.AmountNaira*100))
+	c.reply(w, c.Airtime(r.Context(), in.Network, in.Phone, in.AmountNaira*100, in.RequestID))
 }
 
 func (c *Client) handleData(w http.ResponseWriter, r *http.Request) {
@@ -75,11 +76,13 @@ func (c *Client) handleData(w http.ResponseWriter, r *http.Request) {
 		Network string `json:"network"`
 		Plan    string `json:"plan"`
 		Phone   string `json:"phone"`
+		// RequestID is optional: our own reference, echoed back by ABS if it keeps it.
+		RequestID string `json:"request_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	c.reply(w, c.Data(r.Context(), in.Network, in.Plan, in.Phone))
+	c.reply(w, c.Data(r.Context(), in.Network, in.Plan, in.Phone, in.RequestID))
 }
 
 func (c *Client) handleElectricity(w http.ResponseWriter, r *http.Request) {
@@ -87,23 +90,25 @@ func (c *Client) handleElectricity(w http.ResponseWriter, r *http.Request) {
 		Disco       string `json:"disco"`
 		Meter       string `json:"meter"`
 		AmountNaira int64  `json:"amount_naira"`
+		RequestID   string `json:"request_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	c.reply(w, c.Electricity(r.Context(), in.Disco, in.Meter, in.AmountNaira*100))
+	c.reply(w, c.Electricity(r.Context(), in.Disco, in.Meter, in.AmountNaira*100, in.RequestID))
 }
 
 func (c *Client) handleVoucher(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Network  string `json:"network"`
-		Unit     string `json:"unit"`
-		Quantity int    `json:"quantity"`
+		Network   string `json:"network"`
+		Unit      string `json:"unit"`
+		Quantity  int    `json:"quantity"`
+		RequestID string `json:"request_id"`
 	}
 	if !decode(w, r, &in) {
 		return
 	}
-	c.reply(w, c.Voucher(r.Context(), in.Network, in.Unit, in.Quantity))
+	c.reply(w, c.Voucher(r.Context(), in.Network, in.Unit, in.Quantity, in.RequestID))
 }
 
 func (c *Client) handleCheckTransaction(w http.ResponseWriter, r *http.Request) {

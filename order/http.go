@@ -249,11 +249,14 @@ type adminOrderView struct {
 	RefundedAt   *time.Time `json:"refunded_at,omitempty"`
 	// ProfitKobo is what the order earned: only known for a SUCCESS order whose
 	// cost was kept (orders made before costs were stored show null).
-	ProfitKobo    *int64    `json:"profit_kobo"`
-	CustomerEmail string    `json:"customer_email"`
-	TxnReference  string    `json:"transaction_reference,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ProfitKobo    *int64 `json:"profit_kobo"`
+	CustomerEmail string `json:"customer_email"`
+	TxnReference  string `json:"transaction_reference,omitempty"`
+	// VendorReference is ABS's own id for the purchase, to find it in the ABS dashboard. Present once an
+	// ABS webhook has been matched to the order.
+	VendorReference string    `json:"vendor_reference,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func refundedAt(o Order) *time.Time {
@@ -268,18 +271,9 @@ func adminViewOf(o Order) adminOrderView {
 		PlanID: o.PlanID, PlanName: o.PlanName, PlanNote: o.PlanNote, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
 		TotalKobo: o.Due(), CostKobo: o.CostKobo, PaymentFee: o.PaymentFeeKobo, ProfitKobo: o.Profit(),
 		RefundFee: o.RefundFeeKobo, RefundedKobo: o.Refunded(), RefundNote: o.RefundNote, RefundedAt: refundedAt(o),
-		CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
+		CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, VendorReference: o.VendorRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
 }
 
-// markRefunded closes an order in REFUND_DUE after the money was sent back by
-// hand. It does not move any money itself. The body is optional:
-//
-//	{"refund_fee_kobo": 5000, "refund_amount_kobo": 983875, "note": "refunded from the Kora dashboard", "payment_fee_returned": false}
-//
-// refund_fee_kobo is what sending the refund cost; it goes into the net profit.
-// refund_amount_kobo is what was sent back to the customer; leave it out (or 0) for
-// the whole total, or give the smaller amount when the costs were deducted.
-// payment_fee_returned says the provider gave its fee on the original payment back.
 // resolveOrder is POST /admin/orders/{id}/resolve {"outcome":"delivered"|"failed","note":"..."}: the owner
 // has checked with ABS what became of an order whose outcome the server could not tell (PENDING).
 // "delivered" makes it SUCCESS; "failed" makes it REFUND_DUE. See Service.Resolve.
@@ -322,6 +316,15 @@ func (a *API) resolveOrder(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// markRefunded closes an order in REFUND_DUE after the money was sent back by
+// hand. It does not move any money itself. The body is optional:
+//
+//	{"refund_fee_kobo": 5000, "refund_amount_kobo": 983875, "note": "refunded from the Kora dashboard", "payment_fee_returned": false}
+//
+// refund_fee_kobo is what sending the refund cost; it goes into the net profit.
+// refund_amount_kobo is what was sent back to the customer; leave it out (or 0) for
+// the whole total, or give the smaller amount when the costs were deducted.
+// payment_fee_returned says the provider gave its fee on the original payment back.
 func (a *API) markRefunded(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefundFeeKobo    int64  `json:"refund_fee_kobo"`
@@ -781,8 +784,11 @@ func (a *API) vendInBackground(o Order) {
 	}()
 }
 
-// absWebhook only records ABS events for now. ABS's Direct API returns no
-// order id, so matching an event to an order is not designed yet.
+// absWebhook records every ABS event, and acts on the two that say how a purchase ended: a settled or
+// failed transaction settles the PENDING order it belongs to (SettleFromABS says how it is matched,
+// since ABS's Direct API gives no order id). It answers 503 only when the order is being bought at
+// this moment, so ABS delivers it again; anything unmatched is recorded as an event and answered 200.
+// A message whose signature was not checked (no secret, sandbox only) is saved and never acted on.
 func (a *API) absWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
@@ -802,6 +808,29 @@ func (a *API) absWebhook(w http.ResponseWriter, r *http.Request) {
 	if err := a.Store.LogWebhook(r.Context(), "abs", r.Header.Get("X-ABS-Delivery"), body); err != nil {
 		a.Log.Error("Webhook - API", "detail", "could not save webhook: "+err.Error())
 		reply.Fail(w, http.StatusInternalServerError, "could not save webhook")
+		return
+	}
+	if a.ABSWebhookSecret == "" {
+		// No secret means the signature was not checked (sandbox only): anyone could have sent this, so it
+		// is saved and nothing more.
+		reply.OK(w, http.StatusOK, nil)
+		return
+	}
+	event, err := abs.ParseWebhook(r.Header, body)
+	if err != nil {
+		a.Log.Warn("Webhook - ABS", "detail", "unreadable body: "+err.Error())
+		reply.OK(w, http.StatusOK, nil)
+		return
+	}
+	switch err := a.SettleFromABS(r.Context(), event); {
+	case errors.Is(err, ErrStillVending):
+		w.Header().Set("Retry-After", "60")
+		logging.Planned(w)
+		reply.Fail(w, http.StatusServiceUnavailable, "the purchase is still in progress, try again shortly")
+		return
+	case err != nil:
+		a.Log.Error("Webhook - ABS", "detail", "could not act on "+event.Name+" "+event.OrderID+": "+err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	reply.OK(w, http.StatusOK, nil)

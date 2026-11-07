@@ -50,14 +50,20 @@ func (r directResponse) failureReason(httpStatus int, reply []byte) string {
 	return fmt.Sprintf("http %d: %s", httpStatus, shorten(reply))
 }
 
+// Every purchase takes requestID, our own reference for the order (up to 191 characters, unique per
+// order). ABS's docs ask integrators to send one with every purchase: ABS links it to its own order id
+// and echoes it back (in webhooks as data.request_id), so a purchase whose reply never arrived can still
+// be found. The Direct API's field tables do not list it (the Partner API's do), so whether ABS keeps it
+// on Direct purchases is checked from the webhook; an unknown field is otherwise ignored. Empty sends none.
+
 // Airtime buys airtime. network is an airtime product trackid such as
 // MTNAIR6TFD (see SystemData). Minimum ₦50, whole naira only.
-func (c *Client) Airtime(ctx context.Context, network, phone string, amountKobo int64) Result {
+func (c *Client) Airtime(ctx context.Context, network, phone string, amountKobo int64, requestID string) Result {
 	naira, ok := wholeNaira(amountKobo)
 	if !ok {
 		return rejected("amount must be a positive whole number of naira")
 	}
-	return c.postSpend(ctx, pathBuyAirtime, url.Values{
+	return c.postSpend(ctx, pathBuyAirtime, requestID, url.Values{
 		"airtimetid": {network},
 		"phoneno":    {phone},
 		"amount":     {strconv.FormatInt(naira, 10)},
@@ -67,8 +73,8 @@ func (c *Client) Airtime(ctx context.Context, network, phone string, amountKobo 
 // Data buys a data plan. network is a data network trackid such as MTN56TFD
 // and plan a plan trackid such as 6BO1H. Both come from SystemData and differ
 // from the airtime ids (mixing them gives error code 141).
-func (c *Client) Data(ctx context.Context, network, plan, phone string) Result {
-	return c.postSpend(ctx, pathBuyData, url.Values{
+func (c *Client) Data(ctx context.Context, network, plan, phone, requestID string) Result {
+	return c.postSpend(ctx, pathBuyData, requestID, url.Values{
 		"airtimetid":  {network},
 		"cardunittid": {plan},
 		"phoneno":     {phone},
@@ -77,12 +83,12 @@ func (c *Client) Data(ctx context.Context, network, plan, phone string) Result {
 
 // Electricity tops up a meter. disco is a service trackid from SystemData.
 // Minimum ₦1000, whole naira only. Call ValidateMeter first.
-func (c *Client) Electricity(ctx context.Context, disco, meter string, amountKobo int64) Result {
+func (c *Client) Electricity(ctx context.Context, disco, meter string, amountKobo int64, requestID string) Result {
 	naira, ok := wholeNaira(amountKobo)
 	if !ok {
 		return rejected("amount must be a positive whole number of naira")
 	}
-	return c.postSpend(ctx, pathBuyElectric, url.Values{
+	return c.postSpend(ctx, pathBuyElectric, requestID, url.Values{
 		"provider_tid": {disco},
 		"meter_number": {meter},
 		"amount":       {strconv.FormatInt(naira, 10)},
@@ -91,11 +97,11 @@ func (c *Client) Electricity(ctx context.Context, disco, meter string, amountKob
 
 // Voucher buys 1-30 airtime vouchers. unit is a voucher unit trackid such as
 // HBSI2 (MTN ₦500).
-func (c *Client) Voucher(ctx context.Context, network, unit string, quantity int) Result {
+func (c *Client) Voucher(ctx context.Context, network, unit string, quantity int, requestID string) Result {
 	if quantity < 1 || quantity > 30 {
 		return rejected("voucher quantity must be 1-30")
 	}
-	return c.postSpend(ctx, pathBuyVoucher, url.Values{
+	return c.postSpend(ctx, pathBuyVoucher, requestID, url.Values{
 		"airtimetid":  {network},
 		"cardunittid": {unit},
 		"totalunit":   {strconv.Itoa(quantity)},
@@ -149,9 +155,12 @@ func (c *Client) SystemData(ctx context.Context) (json.RawMessage, error) {
 }
 
 // postSpend sends a form-encoded spend call and classifies the outcome.
-func (c *Client) postSpend(ctx context.Context, path string, form url.Values) Result {
+func (c *Client) postSpend(ctx context.Context, path, requestID string, form url.Values) Result {
 	if c.sandbox {
 		form.Set("sandbox", "1")
+	}
+	if requestID != "" {
+		form.Set("request_id", requestID)
 	}
 	status, reply, err := c.sendRequest(ctx, http.MethodPost, path,
 		strings.NewReader(form.Encode()), "application/x-www-form-urlencoded")
