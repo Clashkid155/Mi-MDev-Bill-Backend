@@ -50,3 +50,33 @@ func TestParseAWebhookWithNumbersForStatusAndAmount(t *testing.T) {
 		t.Error("an object where a status belongs should not be read")
 	}
 }
+
+// The refund.issued message ABS really sent on 2026-11-11 (recipient swapped for a dummy number): no
+// confirmed_at, status 6, and the time ABS made the message.
+func TestParseARefundABSReallySent(t *testing.T) {
+	body := []byte(`{
+  "event": "refund.issued",
+  "created_at": "2026-11-11T00:04:02+00:00",
+  "data": {
+    "order_id": "BD202611110101NAV5437LHYK261290W",
+    "request_id": null,
+    "status": "6",
+    "amount": "430",
+    "service": 1,
+    "trans_kind": 3,
+    "recipient": "08012345678",
+    "message": "Bought 1GB HOT DEAL 🔥 - 7 DAYS for NGN 430",
+    "balance_before": "43468.00",
+    "balance_after": "43038.00",
+    "confirmed_at": ""
+  }
+}`)
+	ev, err := ParseWebhook(http.Header{}, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Name != "refund.issued" || ev.Status != "6" || ev.Amount != "430" || ev.OrderID != "BD202611110101NAV5437LHYK261290W" ||
+		ev.CreatedAt != "2026-11-11T00:04:02+00:00" || ev.ConfirmedAt != "" {
+		t.Errorf("%+v", ev)
+	}
+}

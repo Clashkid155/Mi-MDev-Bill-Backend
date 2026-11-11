@@ -1274,7 +1274,41 @@
 								}
 							}
 						},
-						"description": "For an order in PENDING: the customer paid, but ABS never gave a clear answer (a timeout, a 5xx, an unreadable reply), so the server cannot know whether they got what they paid for, and it never buys again by itself. You check with ABS (its dashboard history: recipient, amount, time; give a slow one a few minutes, ABS sometimes delivers late) and then say what happened. outcome \"delivered\": the order becomes SUCCESS and the customer is emailed their receipt (an ELECTRICITY order gets no receipt, because the token only comes in ABS's reply: send it yourself). outcome \"failed\": the order becomes FAILED and then REFUND_DUE; send the money back (Kora dashboard) and finish with Mark refunded. note (optional, up to 500 characters) goes into the event and the audit log. Owner and admin tokens only. 409 if the order is not PENDING (including when it was already resolved: the answer says what it is now), 404 for an unknown order, 400 for an outcome other than delivered or failed. Orders waiting for a decision: GET /admin/orders?status=PENDING. It moves no money and never calls ABS. ABS's own webhook (transaction.settled or transaction.failed) closes a PENDING order by itself when it fits exactly one order, so use this for the rest."
+						"description": "For an order in PENDING: the customer paid, but ABS never gave a clear answer (a timeout, a 5xx, an unreadable reply), so the server cannot know whether they got what they paid for, and it never buys again by itself. You check with ABS (its dashboard history: recipient, amount, time; give a slow one a few minutes, ABS sometimes delivers late) and then say what happened. outcome \"delivered\": the order becomes SUCCESS and the customer is emailed their receipt (an ELECTRICITY order gets no receipt, because the token only comes in ABS's reply: send it yourself). outcome \"failed\": the order becomes FAILED and then REFUND_DUE; send the money back (Kora dashboard) and finish with Mark refunded. note (optional, up to 500 characters) goes into the event and the audit log. Owner and admin tokens only. 409 if the order is not PENDING (including when it was already resolved: the answer says what it is now), 404 for an unknown order, 400 for an outcome other than delivered or failed. Orders waiting for a decision: GET /admin/orders?status=PENDING. It moves no money and never calls ABS. ABS's own webhook (transaction.settled or transaction.failed) closes a PENDING order by itself when it fits exactly one order, so use this for the rest. A REFUND_DUE order can also be marked delivered (never failed), with a required note, when you served the customer by hand in the ABS dashboard instead of refunding: {\"outcome\": \"delivered\", \"note\": \"bought by hand in the ABS dashboard\"}."
+					}
+				},
+				{
+					"name": "Buy an order again (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/orders/{{orderId}}/retry",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"admin",
+								"orders",
+								"{{orderId}}",
+								"retry"
+							]
+						},
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"confirm\": false,\n  \"note\": \"ABS had a bad minute, buying again\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"description": "Your decision to buy an order from ABS again; the server never does this by itself. Works on a REFUND_DUE order (ABS failed the purchase, or the payment arrived after the order expired, so the customer's money is still held) and on a PENDING one. A PENDING order needs \"confirm\": true: nobody knows whether the first purchase went through, so buying again may deliver it twice and charge you twice; look in the ABS dashboard first (recipient, amount, time). It answers 202 with the order as VENDING at once and buys in the background (ABS can take up to 90 seconds); read the order again for the result: SUCCESS (the customer is emailed their receipt), REFUND_DUE again if ABS fails it again (you can try again), or PENDING if ABS gives no clear answer. The order's \"attempts\" counts the purchases, and the repeat is sent to ABS with request_id <order id>-2 (then -3). The earlier purchase's ABS id is forgotten so the new purchase's webhook can claim the order. Two clicks at once buy once. If you bought it by hand in the ABS dashboard instead, use Resolve with \"delivered\" and a note. note (optional, up to 500 characters) goes into the event and the audit log. Owner and admin tokens only. 409 if the order is neither PENDING nor REFUND_DUE, 400 if a PENDING order is not confirmed, 404 for an unknown order."
 					}
 				},
 				{

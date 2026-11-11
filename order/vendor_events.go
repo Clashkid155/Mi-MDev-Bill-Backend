@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -39,6 +40,11 @@ var vendedStatuses = []Status{StatusVending, StatusPending, StatusSuccess, Statu
 // ignored. A nil error does not mean an order changed; see the rule above. A non-nil error means the
 // webhook should be delivered again.
 func (s *Service) SettleFromABS(ctx context.Context, ev abs.Event) error {
+	if state := absState(ev); state != "" {
+		if alerted, err := s.trackABS(ctx, ev, state); err != nil || alerted {
+			return err // a purchase ABS had refunded is settling again: the owner decides, nothing is acted on
+		}
+	}
 	var delivered bool
 	switch {
 	case ev.Name == "transaction.settled" && ev.Status == "1":
@@ -73,11 +79,27 @@ func (s *Service) SettleFromABS(ctx context.Context, ev abs.Event) error {
 	if match == nil {
 		switch len(found) {
 		case 0:
+			if delivered {
+				twins, err := s.Store.VendorTwins(ctx, ev.OrderID, recipient, cost, time.Now().Add(-vendorMatchWindow))
+				if err != nil {
+					return err
+				}
+				if len(twins) > 0 {
+					s.reportTwin(twins[0], ev, cost)
+					return nil
+				}
+			}
 			s.event(LevelInfo, "abs.unmatched", "", fmt.Sprintf("ABS %s for %s matches none of our recent orders: a purchase made outside this server, or an order too old", ev.Name, formatNaira(cost)), map[string]any{"abs_order": ev.OrderID})
 			return nil
 		case 1:
 			match = &found[0]
 		default:
+			if settlesNothing(found, delivered) {
+				// Say two identical airtime purchases both delivered: their messages fit both orders, but
+				// neither order needs anything, so there is nothing to ask the owner.
+				s.Log.Info("Webhook - ABS", "detail", fmt.Sprintf("ABS %s fits %d orders that are already in the state it reports; nothing to do", ev.Name, len(found)))
+				return nil
+			}
 			ids := make([]string, len(found))
 			for i, o := range found {
 				ids[i] = o.ID
@@ -88,6 +110,16 @@ func (s *Service) SettleFromABS(ctx context.Context, ev abs.Event) error {
 		}
 		if match.Status == StatusVending {
 			return ErrStillVending
+		}
+		if !delivered && match.Attempts > 1 && (match.Status == StatusPending || match.Status == StatusSuccess) {
+			// The owner bought this order again, so a purchase failing says nothing certain about the order:
+			// it may be the earlier purchase, and the later one may well have been delivered.
+			if match.Status == StatusPending {
+				s.event(LevelWarn, "abs.unclear", match.ID, "ABS reports a failed purchase for an order that was bought more than once, so which purchase it was is unknown: nothing was changed, check ABS's dashboard and use the resolve action", map[string]any{"abs_order": ev.OrderID})
+			} else {
+				s.Log.Info("Webhook - ABS", "detail", fmt.Sprintf("ABS reports a failed purchase for order %s, which was bought again and delivered: ignored", match.ID))
+			}
+			return nil
 		}
 		claimed, err := s.Store.ClaimVendorRef(ctx, match.ID, ev.OrderID)
 		if err != nil {
@@ -120,7 +152,8 @@ func (s *Service) applyABSOutcome(ctx context.Context, o Order, ev abs.Event, de
 		// Recorded as failed (or already refunded) but ABS says the customer got it.
 		s.event(LevelError, "abs.conflict", o.ID, fmt.Sprintf("ABS says this order was DELIVERED but it is %s: do not refund it, or the customer is paid twice. Nothing was changed", o.Status), map[string]any{"abs_order": ev.OrderID})
 		s.alert("abs-conflict:"+o.ID, refundThrottle, "ABS delivered an order recorded as "+string(o.Status)+": "+o.ID,
-			summary(o)+"\nABS "+ev.OrderID+" says this purchase was delivered, but the order is "+string(o.Status)+". If a refund is still due, do not send it. Nothing was changed; check ABS's dashboard.\n")
+			summary(o)+"\nABS "+ev.OrderID+" says this purchase was delivered, but the order is "+string(o.Status)+". If a refund is still due, do not send it. Nothing was changed; check ABS's dashboard.\n"+
+				"If this is a purchase you made by hand for this customer, close the order as delivered:\n  POST /admin/orders/{id}/resolve  {\"outcome\": \"delivered\", \"note\": \"bought by hand in the ABS dashboard\"}\n")
 	case !delivered && o.Status == StatusSuccess:
 		s.event(LevelError, "abs.conflict", o.ID, "ABS says this order FAILED but it is SUCCESS: the customer may not have received it. Nothing was changed", map[string]any{"abs_order": ev.OrderID})
 		s.alert("abs-conflict:"+o.ID, refundThrottle, "ABS says a delivered order failed: "+o.ID,
@@ -199,4 +232,141 @@ func shortText(s string, max int) string {
 		return string(r[:max]) + "..."
 	}
 	return s
+}
+
+// absState is what a message says became of an ABS transaction, or "" for a message that is not about one.
+func absState(ev abs.Event) string {
+	switch {
+	case ev.OrderID == "":
+		return ""
+	case ev.Name == "transaction.settled" && ev.Status == "1":
+		return "settled"
+	case ev.Name == "transaction.failed" && ev.Status == "3":
+		return "failed"
+	case ev.Name == "refund.issued":
+		return "refunded"
+	}
+	return ""
+}
+
+// trackABS remembers the state ABS reports for one of its transactions. When a transaction ABS had said
+// it failed or refunded now settles, the owner may have been charged for it again (and the customer may
+// have received it twice, for instance if it was also bought by hand), so that is an error event and an
+// email, and alerted comes back true. A message older than the one on record (they can arrive out of
+// order) never changes the record.
+func (s *Service) trackABS(ctx context.Context, ev abs.Event, state string) (alerted bool, err error) {
+	at, perr := time.Parse(time.RFC3339, ev.CreatedAt)
+	if perr != nil {
+		at = time.Now()
+	}
+	prev, prevAt, err := s.Store.NoteABSState(ctx, ev.OrderID, state, at)
+	if err != nil {
+		return false, err
+	}
+	if state != "settled" || (prev != "failed" && prev != "refunded") || at.Before(prevAt) {
+		return false, nil
+	}
+	s.event(LevelError, "abs.redelivered", "", fmt.Sprintf("ABS says a purchase it had %s has now settled, so you may have been charged again and the customer may have it twice (%s)", prev, formatNaira(koboOrZero(ev.Amount))),
+		map[string]any{"abs_order": ev.OrderID, "was": prev})
+	s.alert("abs-redelivered:"+ev.OrderID, refundThrottle, "ABS settled a purchase it had "+prev+": "+formatNaira(koboOrZero(ev.Amount)),
+		"ABS purchase "+ev.OrderID+" was reported "+prev+" earlier, and ABS now reports it settled.\n\n"+
+			"Recipient: "+ev.Recipient+"\nAmount ABS charged: "+formatNaira(koboOrZero(ev.Amount))+"\nABS's note: "+shortText(ev.Message, 200)+"\n\n"+
+			"You may have been charged for it again, and the customer may have received it twice (for example if you also bought it by hand after the failure). "+
+			"Nothing was changed on any order. Check the ABS dashboard and, if it is a double charge, ask ABS to reverse it, quoting the purchase id above.\n")
+	return true, nil
+}
+
+// reportTwin: a second ABS purchase settled for the same recipient and cost as an order another ABS
+// purchase already settled. Often a purchase made by hand on purpose, but it is also what a double
+// delivery looks like, so the owner is told.
+func (s *Service) reportTwin(o Order, ev abs.Event, cost int64) {
+	s.event(LevelWarn, "abs.duplicate", o.ID, fmt.Sprintf("ABS settled a second purchase for %s that this order already has one for (%s), nothing was changed", formatNaira(cost), o.Status),
+		map[string]any{"abs_order": ev.OrderID, "order_abs_ref": o.VendorRef})
+	s.alert("abs-duplicate:"+ev.OrderID, refundThrottle, "Possible double purchase: "+formatNaira(cost)+" settled twice, order "+o.ID,
+		summary(o)+"\nABS purchase "+ev.OrderID+" just settled for the same recipient and amount, and this order is already tied to ABS purchase "+o.VendorRef+" ("+string(o.Status)+").\n\n"+
+			"If you bought it by hand on purpose, there is nothing to do. If not, ABS may have delivered and charged it twice: check the ABS dashboard and ask ABS to reverse the extra one, quoting the purchase id above. Nothing was changed on any order.\n")
+}
+
+func koboOrZero(amount string) int64 {
+	k, _ := koboOf(amount)
+	return k
+}
+
+// VendorTwins returns the orders from `since` for this recipient and cost that reached ABS and are already
+// tied to a different ABS purchase than ref.
+func (s *Store) VendorTwins(ctx context.Context, ref, recipient string, costKobo int64, since time.Time) ([]Order, error) {
+	args := []any{ref, recipient, costKobo, since.Unix()}
+	for _, st := range vendedStatuses {
+		args = append(args, string(st))
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+orderColumns+` FROM orders
+		WHERE vendor_ref != '' AND vendor_ref != ? AND recipient = ? AND cost_kobo = ? AND created_at >= ?
+			AND status IN (?`+strings.Repeat(",?", len(vendedStatuses)-1)+`)
+		ORDER BY created_at, id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var orders []Order
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+// NoteABSState records the state ABS reports for one of its transactions, as of at, and returns the state
+// and time on record before (empty if none). A report older than the record is not stored.
+func (s *Store) NoteABSState(ctx context.Context, absID, state string, at time.Time) (prev string, prevAt time.Time, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	defer tx.Rollback()
+	var prevUnix int64
+	switch err := tx.QueryRowContext(ctx, `SELECT state, event_at FROM abs_transactions WHERE abs_id = ?`, absID).Scan(&prev, &prevUnix); {
+	case errors.Is(err, sql.ErrNoRows):
+		prev = ""
+	case err != nil:
+		return "", time.Time{}, err
+	default:
+		prevAt = time.Unix(prevUnix, 0)
+		if at.Before(prevAt) {
+			return prev, prevAt, nil
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO abs_transactions (abs_id, state, event_at, updated_at) VALUES (?,?,?,?)
+		ON CONFLICT(abs_id) DO UPDATE SET state = excluded.state, event_at = excluded.event_at, updated_at = excluded.updated_at`,
+		absID, state, at.Unix(), time.Now().Unix()); err != nil {
+		return "", time.Time{}, err
+	}
+	return prev, prevAt, tx.Commit()
+}
+
+// PurgeABSTransactions forgets what was recorded before the cutoff and says how many went.
+func (s *Store) PurgeABSTransactions(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM abs_transactions WHERE updated_at < ?`, before.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// settlesNothing says whether a message that fits several orders asks anything of the owner: not when every
+// one of them is already in the state the message reports (delivered, or failed and refunded).
+func settlesNothing(found []Order, delivered bool) bool {
+	for _, o := range found {
+		switch {
+		case o.Status == StatusPending, o.Status == StatusVending:
+			return false
+		case delivered && o.Status != StatusSuccess:
+			return false
+		case !delivered && o.Status == StatusSuccess:
+			return false
+		}
+	}
+	return true
 }

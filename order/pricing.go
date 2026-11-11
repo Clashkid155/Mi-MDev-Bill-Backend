@@ -238,15 +238,25 @@ func (s *Service) ValidateMeter(ctx context.Context, serviceID, meter string) (j
 	return details, err
 }
 
-// buy sends the order to ABS, with the order id as our own reference (ABS echoes it back as request_id).
+// requestID is the reference ABS is given for a purchase: the order id, and for a repeat purchase (the owner
+// bought the order again) the order id with the attempt number, so no two purchases share one.
+func requestID(o Order) string {
+	if o.Attempts > 1 {
+		return fmt.Sprintf("%s-%d", o.ID, o.Attempts)
+	}
+	return o.ID
+}
+
+// buy sends the order to ABS, with our own reference for it (ABS is meant to echo it back as request_id).
 func (s *Service) buy(ctx context.Context, o Order) abs.Result {
+	ref := requestID(o)
 	switch o.Kind {
 	case KindAirtime:
-		return s.Vendor.Airtime(ctx, o.Network, o.Recipient, o.AmountKobo, o.ID)
+		return s.Vendor.Airtime(ctx, o.Network, o.Recipient, o.AmountKobo, ref)
 	case KindData:
-		return s.Vendor.Data(ctx, o.Network, o.PlanID, o.Recipient, o.ID)
+		return s.Vendor.Data(ctx, o.Network, o.PlanID, o.Recipient, ref)
 	case KindElectricity:
-		return s.Vendor.Electricity(ctx, o.Network, o.Recipient, o.AmountKobo, o.ID)
+		return s.Vendor.Electricity(ctx, o.Network, o.Recipient, o.AmountKobo, ref)
 	}
 	return abs.Result{State: abs.Failed, Message: "unknown order kind " + o.Kind}
 }

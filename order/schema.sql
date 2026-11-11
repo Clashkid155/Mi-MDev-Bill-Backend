@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS orders (
     checkout_url    TEXT NOT NULL DEFAULT '',
     expires_at      INTEGER NOT NULL,          -- unix seconds
     vend_response   TEXT NOT NULL DEFAULT '',  -- raw ABS reply; may hold tokens/pins
+    attempts        INTEGER NOT NULL DEFAULT 1, -- purchases sent to ABS for this order: 1, or more when the owner bought it again
     vendor_ref      TEXT NOT NULL DEFAULT '',  -- ABS's own id for the purchase (BD.../BA...), learned from its webhook; '' until then
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL
@@ -43,6 +44,16 @@ CREATE TABLE IF NOT EXISTS webhook_events (
     body        TEXT NOT NULL,
     received_at INTEGER NOT NULL
 );
+
+-- The last state ABS reported for each of its own transactions (settled, failed or refunded), kept so a purchase
+-- ABS said it refunded or failed and later says it settled can be noticed: that one may have been charged twice.
+CREATE TABLE IF NOT EXISTS abs_transactions (
+    abs_id     TEXT PRIMARY KEY,
+    state      TEXT NOT NULL,
+    event_at   INTEGER NOT NULL,   -- when ABS says it happened (the message's created_at), unix seconds
+    updated_at INTEGER NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS abs_transactions_updated ON abs_transactions (updated_at);
 
 -- Money the business spends that no order records: hosting, email, the ABS agent
 -- fee, a domain, the 50 naira duty on our own transfers. Entered by hand through

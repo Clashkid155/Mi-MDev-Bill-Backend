@@ -120,7 +120,8 @@ func summary(o Order) string {
 }
 
 const refundSteps = "\nTo refund: find the payment in the Kora dashboard by the reference above and refund it (you can reduce the amount to cover the transaction costs).\n" +
-	"Then close the order so the app stops showing it as waiting:\n  POST /admin/orders/{id}/refunded  {\"refund_fee_kobo\": ..., \"refund_amount_kobo\": ..., \"note\": \"...\"}\n"
+	"Then close the order so the app stops showing it as waiting:\n  POST /admin/orders/{id}/refunded  {\"refund_fee_kobo\": ..., \"refund_amount_kobo\": ..., \"note\": \"...\"}\n" +
+	"If you served the customer yourself instead (say you bought it in the ABS dashboard), do not refund. Close it as delivered:\n  POST /admin/orders/{id}/resolve  {\"outcome\": \"delivered\", \"note\": \"bought by hand in the ABS dashboard\"}\n"
 
 // alertRefundDue: a customer paid and we could not deliver, so they are owed money.
 func (s *Service) alertRefundDue(o Order, why string) {

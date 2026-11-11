@@ -462,3 +462,14 @@ func TestResolvingAnOrderIsAnAdminWrite(t *testing.T) {
 		t.Errorf("with the token and no outcome: %d, want 400", code)
 	}
 }
+
+func TestBuyingAnOrderAgainIsAnAdminWrite(t *testing.T) {
+	h, _ := testServer(t, Config{AdminToken: "s3cret"}, nil)
+	if code := do(h, "POST", "/admin/orders/MDEV_x/retry", "", "192.0.2.80:1000").Code; code != 401 {
+		t.Errorf("with no token: %d, want 401", code)
+	}
+	// With the token the route exists: the order just is not there.
+	if code := do(h, "POST", "/admin/orders/MDEV_x/retry", "Bearer s3cret", "192.0.2.81:1000").Code; code != 404 {
+		t.Errorf("with the token and an unknown order: %d, want 404", code)
+	}
+}

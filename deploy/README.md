@@ -571,6 +571,28 @@ the order for you (see below). If no webhook has done so, close it yourself:
 **`REFUND_DUE`: the customer is owed money.** Send it back from the Kora dashboard (find the payment by the order id; you may
 deduct the costs), then record it with `POST /admin/orders/{id}/refunded` so the app stops saying it is waiting.
 
+**`REFUND_DUE`, but you served the customer yourself.** If ABS failed the server's attempt and you bought the same thing by
+hand in the ABS dashboard, do not refund. Close the order with `POST /admin/orders/{id}/resolve` and
+`{"outcome": "delivered", "note": "bought by hand in the ABS dashboard"}`. The note is required here. The order becomes
+`SUCCESS`, the customer is emailed their receipt, and your profit figures count the order once (ABS refunds its failed attempt
+to your wallet, so you paid for one purchase). Before buying by hand, check that ABS says it refunded the failed attempt.
+Once an order is `REFUNDED` it can no longer be marked delivered.
+
+**`REFUND_DUE` or `PENDING`, and you want to try ABS again.** Your decision, never the server's: `POST /admin/orders/{id}/retry`
+(optional `"note"`). It buys the order from ABS again, with the customer's money you already hold, and answers 202 at once
+because ABS can take up to 90 seconds; read the order again for the result: `SUCCESS` (the customer is emailed their receipt),
+`REFUND_DUE` again if ABS fails it again (you can try again), or `PENDING` if ABS gives no clear answer. The order's `attempts`
+counts the purchases. A `PENDING` order needs `{"confirm": true}`, because nobody knows whether the first purchase went through,
+so buying again may deliver it twice and charge you twice: look in the ABS dashboard first. Two clicks at once buy once, and a
+`SUCCESS` or `REFUNDED` order cannot be bought again. If you bought it by hand instead, close it as delivered (above) and do not
+use this.
+
+**The customer is emailed when you record a refund.** `POST /admin/orders/{id}/refunded` sends them "Your Mi MDev refund has been
+sent": the amount refunded, what was bought, the date and the reference, and, if you refunded less than they paid, how much was
+kept for transaction costs. It says the money went back to the account they paid from, that it can take up to 7 days to show
+(Kora's own figure), and to contact support if it has not arrived after 7 days. If the mail service is down the refund is still recorded and a `refund.notice_failed` event tells you to
+let the customer know.
+
 **Why it happens, and how it is reduced.** ABS waits about a minute for the provider before it answers a purchase and
 tells integrators to allow at least 90 seconds, so purchases are given 90 seconds (everything else keeps 30). A purchase
 that took 32 seconds once left an order pending when the limit was 30. Every purchase also carries the order id as ABS's
@@ -593,6 +615,24 @@ in the last 6 hours. The server acts only when the message fits **exactly one** 
   order is `SUCCESS`), nothing is changed and you get an `abs.conflict` event and an email. Do not send a refund for an order
   ABS says it delivered.
 * A message for an order being bought at that moment is answered 503 and ABS sends it again shortly.
+* A message that fits several orders which are all already in the state it reports (two identical purchases that both
+  delivered) is simply noted in the log: nothing needs deciding.
+* An order you bought again (`attempts` above 1) is never made a refund due by a "failed" message, because it could be about
+  the earlier purchase while the later one delivered. You get an `abs.unclear` event instead, and a "settled" message still
+  settles it.
+
+**Double purchases.** The server never buys an order twice by itself, but ABS can still charge twice (it fails a purchase,
+refunds it, and you buy by hand, and then it processes the first one after all). The server remembers the last state ABS
+reported for each of its purchases and tells you in two cases, changing no order in either:
+
+* A purchase ABS had **failed or refunded** later **settles**: an `abs.redelivered` error event and an email, "ABS settled a
+  purchase it had refunded". Ask ABS to reverse it, quoting the purchase id in the email. A message that is older than the one
+  on record (they can arrive out of order) is ignored, and so is a refund after a settled one (a reversal).
+* A second purchase settles for the same recipient and amount as an order that is already tied to a different ABS purchase,
+  within 6 hours: an `abs.duplicate` warning and an email, "Possible double purchase". Nothing to do if you bought it by hand
+  on purpose.
+
+The records are kept as long as the saved webhooks (`WEBHOOK_RETENTION_DAYS`).
 
 ### Is a provider down? Provider health
 

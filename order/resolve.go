@@ -16,6 +16,9 @@ const (
 // ErrNotPending means the order is not waiting for a decision.
 var ErrNotPending = errors.New("order: only a PENDING order can be resolved")
 
+// ErrNoteRequired means a refund due order cannot be marked delivered without saying how it was delivered.
+var ErrNoteRequired = errors.New("order: a note is required to mark a refund due order delivered")
+
 // Resolve settles an order whose outcome ABS never made clear (a timeout, a 5xx, an unreadable reply):
 // the server cannot know whether the customer got what they paid for and never buys again by itself,
 // so the owner checks with ABS and says which it was.
@@ -27,12 +30,20 @@ var ErrNotPending = errors.New("order: only a PENDING order can be resolved")
 // PENDING, and otherwise ErrNotPending is returned with the order as it now is. by is who decided,
 // for the events; the audit log records the request itself.
 //
+// A REFUND_DUE order can also be marked delivered (never failed: it already is): the customer was served
+// another way, for example the owner bought it by hand in the ABS dashboard after ABS failed the server's
+// attempt. It becomes SUCCESS and the customer gets their receipt. A note saying how is required, because
+// this closes a refund the customer was owed.
+//
 // An electricity order marked delivered gets no receipt, because the token is only in ABS's reply
 // and that reply never arrived: the owner has to pass the token to the customer by hand.
 func (s *Service) Resolve(ctx context.Context, id, outcome, note, by string) (Order, error) {
 	o, err := s.Store.ByID(ctx, id)
 	if err != nil {
 		return Order{}, err
+	}
+	if o.Status == StatusRefundDue && outcome == OutcomeDelivered {
+		return s.deliveredByHand(ctx, o, note, by)
 	}
 	if o.Status != StatusPending {
 		return o, ErrNotPending
@@ -71,6 +82,26 @@ func (s *Service) Resolve(ctx context.Context, id, outcome, note, by string) (Or
 	return s.Store.ByID(ctx, id)
 }
 
+// deliveredByHand closes a REFUND_DUE order the owner served another way.
+func (s *Service) deliveredByHand(ctx context.Context, o Order, note, by string) (Order, error) {
+	if strings.TrimSpace(note) == "" {
+		return o, ErrNoteRequired
+	}
+	moved, err := s.Store.Move(ctx, o.ID, StatusRefundDue, StatusSuccess)
+	if err != nil {
+		return o, err
+	}
+	if !moved {
+		return s.current(ctx, o.ID)
+	}
+	o.Status = StatusSuccess
+	s.event(LevelInfo, "order.resolved", o.ID, handDeliveredMessage(o, by, note), map[string]any{"outcome": OutcomeDelivered, "was": string(StatusRefundDue)})
+	if o.Kind != KindElectricity {
+		s.sendReceipt(ctx, o, nil)
+	}
+	return s.Store.ByID(ctx, o.ID)
+}
+
 // current returns the order as it is now together with ErrNotPending: someone else settled it first.
 func (s *Service) current(ctx context.Context, id string) (Order, error) {
 	o, err := s.Store.ByID(ctx, id)
@@ -86,4 +117,8 @@ func resolvedMessage(o Order, what, by, note string) string {
 		msg += ": " + note
 	}
 	return msg
+}
+
+func handDeliveredMessage(o Order, by, note string) string {
+	return fmt.Sprintf("%s: was a refund due, marked delivered by hand by %s, so no refund is due: %s", describe(o), by, strings.TrimSpace(note))
 }

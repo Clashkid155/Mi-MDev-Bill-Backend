@@ -132,8 +132,11 @@ func TestOnlyAPendingOrderCanBeResolvedAndOnlyOnce(t *testing.T) {
 		t.Errorf("a waiting order: %d %v", code, out)
 	}
 	due := refundDue(t, f, "res-due")
-	if code, _ := resolve(t, srv, due.ID, `{"outcome":"delivered"}`); code != 409 {
-		t.Errorf("a refund due order: %d, want 409", code)
+	if code, _ := resolve(t, srv, due.ID, `{"outcome":"failed"}`); code != 409 {
+		t.Errorf("failing a refund due order: %d, want 409", code)
+	}
+	if code, _ := resolve(t, srv, due.ID, `{"outcome":"delivered"}`); code != 400 {
+		t.Errorf("a refund due order marked delivered without a note: %d, want 400", code)
 	}
 	if got, _ := f.svc.Store.ByID(context.Background(), due.ID); got.Status != StatusRefundDue {
 		t.Errorf("a refused resolve changed the order to %s", got.Status)
@@ -248,6 +251,60 @@ func TestTheUnknownOutcomeAlertSaysHowToCloseTheOrder(t *testing.T) {
 	for _, want := range []string{"/admin/orders/{id}/resolve", `"delivered"`, `"failed"`, "never buys it again"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the alert does not say %q:\n%s", want, body)
+		}
+	}
+}
+
+// ABS failed the server's attempt, and the owner bought the data by hand in the ABS dashboard.
+func TestARefundDueOrderServedByHandCanBeMarkedDelivered(t *testing.T) {
+	f, read := eventsFixture(t)
+	srv := httptest.NewServer((&API{Service: f.svc}).AdminRoutes())
+	defer srv.Close()
+	o := refundDue(t, f, "res-hand")
+
+	code, out := resolve(t, srv, o.ID, `{"outcome":"delivered","note":"  bought by hand in the ABS dashboard  "}`)
+	data, _ := out["data"].(map[string]any)
+	if code != 200 || data["status"] != "SUCCESS" {
+		t.Fatalf("%d %v", code, out)
+	}
+	if f.receiptsTo("a@b.co") != 1 {
+		t.Errorf("the customer got %d receipts, want 1", f.receiptsTo("a@b.co"))
+	}
+	events := read(platform.EventFilter{OrderID: o.ID, Kind: "order.resolved"})
+	if len(events) != 1 || events[0].Level != LevelInfo || !strings.Contains(events[0].Message, "delivered by hand") ||
+		!strings.Contains(events[0].Message, "bought by hand in the ABS dashboard") {
+		t.Errorf("events %+v", events)
+	}
+	// It cannot be closed again, and once refunded it can no longer be marked delivered.
+	if code, _ := resolve(t, srv, o.ID, `{"outcome":"delivered","note":"again"}`); code != 409 {
+		t.Errorf("a second time: %d, want 409", code)
+	}
+	sent := refundDue(t, f, "res-hand-refunded")
+	if code, _ := postRefunded(t, srv, sent.ID, `{"note":"sent back"}`); code != 200 {
+		t.Fatalf("recording the refund answered %d", code)
+	}
+	if code, _ := resolve(t, srv, sent.ID, `{"outcome":"delivered","note":"too late"}`); code != 409 {
+		t.Errorf("a refunded order marked delivered: %d, want 409", code)
+	}
+}
+
+func TestTheRefundDueEmailSaysHowToCloseAnOrderServedByHand(t *testing.T) {
+	f := newFakes(t)
+	_, sent := alertsOn(t, f)
+	f.absFails(insufficient, 400)
+	f.payAndVend(t, orderWithKey(f, t, "res-hint"))
+	_ = sent()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var body string
+	for _, m := range f.allEmails {
+		if strings.Contains(m.Subject, "Refund due") {
+			body = m.Text
+		}
+	}
+	for _, want := range []string{"/admin/orders/{id}/resolve", `"delivered"`, "bought by hand"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the refund email does not say %q:\n%s", want, body)
 		}
 	}
 }

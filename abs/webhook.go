@@ -43,6 +43,7 @@ func VerifyWebhook(secret string, h http.Header, body []byte, now time.Time) err
 
 type Event struct {
 	Name        string // transaction.settled, transaction.failed, refund.issued, wallet.*
+	CreatedAt   string // when ABS made the message (RFC 3339), which says what happened last when messages arrive out of order
 	DeliveryID  string // X-ABS-Delivery: stable across retries, dedupe on this
 	OrderID     string
 	Status      string // "1" settled, "3" failed, "6" refunded
@@ -72,8 +73,9 @@ func (t *text) UnmarshalJSON(b []byte) error {
 
 func ParseWebhook(h http.Header, body []byte) (Event, error) {
 	var b struct {
-		Event string `json:"event"`
-		Data  struct {
+		Event     string `json:"event"`
+		CreatedAt string `json:"created_at"`
+		Data      struct {
 			OrderID     string `json:"order_id"`
 			Status      text   `json:"status"`
 			Amount      text   `json:"amount"`
@@ -86,7 +88,7 @@ func ParseWebhook(h http.Header, body []byte) (Event, error) {
 		return Event{}, err
 	}
 	return Event{
-		Name: b.Event, DeliveryID: h.Get("X-ABS-Delivery"),
+		Name: b.Event, CreatedAt: b.CreatedAt, DeliveryID: h.Get("X-ABS-Delivery"),
 		OrderID: b.Data.OrderID, Status: string(b.Data.Status), Amount: string(b.Data.Amount),
 		Recipient: b.Data.Recipient, Message: b.Data.Message, ConfirmedAt: b.Data.ConfirmedAt,
 	}, nil

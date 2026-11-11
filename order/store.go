@@ -59,6 +59,9 @@ type Order struct {
 	// VendorRef is ABS's own id for the purchase (the "order_id" in its webhooks), known only once a
 	// webhook has been matched to the order. ABS's purchase reply carries none.
 	VendorRef string
+	// Attempts is how many purchases have been sent to ABS for this order: 1, or more when the owner chose
+	// to buy it again (Service.Retry).
+	Attempts  int
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -135,6 +138,9 @@ func NewStore(db *sql.DB) (*Store, error) {
 	if err := addColumnIfMissing(db, "orders", "refund_note", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return nil, err
 	}
+	if err := addColumnIfMissing(db, "orders", "attempts", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return nil, err
+	}
 	// Matching an ABS webhook looks orders up by ABS's id or by recipient, so both are indexed (created
 	// after the columns above, which an older database may only just have gained).
 	for _, index := range []string{
@@ -205,7 +211,7 @@ func newID() string {
 var idGen = newID
 
 const orderColumns = `id, idempotency_key, kind, network, plan_id, recipient, amount_kobo, cost_kobo, fee_kobo, total_kobo, payment_fee_kobo, refund_fee_kobo, refund_amount_kobo, refund_note, refunded_at, customer_email, customer_name, network_name, plan_name, plan_note, status,
-	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response, vendor_ref,
+	invoice_ref, txn_ref, account_no, account_name, bank_name, checkout_url, expires_at, vend_response, vendor_ref, attempts,
 	created_at, updated_at`
 
 func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
@@ -214,7 +220,7 @@ func scanOrder(row interface{ Scan(...any) error }) (Order, error) {
 	var expires, created, updated, refunded int64
 	err := row.Scan(&o.ID, &o.IdempotencyKey, &o.Kind, &o.Network, &o.PlanID, &o.Recipient, &o.AmountKobo, &o.CostKobo, &o.FeeKobo, &o.TotalKobo, &o.PaymentFeeKobo, &o.RefundFeeKobo, &o.RefundAmountKobo, &o.RefundNote, &refunded, &o.CustomerEmail,
 		&o.CustomerName, &o.NetworkName, &o.PlanName, &o.PlanNote, &status, &o.InvoiceRef, &o.TxnRef, &o.AccountNo, &o.AccountName, &o.BankName, &o.CheckoutURL,
-		&expires, &o.VendResponse, &o.VendorRef, &created, &updated)
+		&expires, &o.VendResponse, &o.VendorRef, &o.Attempts, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return o, ErrNotFound
 	}
@@ -383,6 +389,22 @@ func (s *Store) Move(ctx context.Context, id string, from, to Status) (moved boo
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE orders SET status = ?, updated_at = ? WHERE id = ? AND status = ?`,
 		to, time.Now().Unix(), id, from)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// RetryMove takes an order the owner chose to buy again from `from` (PENDING or REFUND_DUE) to VENDING, counts the
+// attempt and forgets the ABS id of the earlier purchase so the new one can claim it. It is compare-and-set, so
+// two clicks start one purchase. moved is false when the order was no longer in `from`.
+func (s *Store) RetryMove(ctx context.Context, id string, from Status) (moved bool, err error) {
+	if err := Check(from, StatusVending); err != nil {
+		return false, err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE orders SET status = ?, attempts = attempts + 1, vendor_ref = '', updated_at = ? WHERE id = ? AND status = ?`,
+		StatusVending, time.Now().Unix(), id, from)
 	if err != nil {
 		return false, err
 	}

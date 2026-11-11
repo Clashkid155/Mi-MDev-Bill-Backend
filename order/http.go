@@ -73,7 +73,9 @@ func (a *API) Routes() http.Handler {
 //	GET /admin/orders?status=PENDING,REFUND_DUE&limit=50
 //	GET /admin/webhooks?provider=monnify&limit=20    (raw bodies as received)
 //	POST /admin/orders/{id}/refunded {"refund_fee_kobo":5000,"refund_amount_kobo":983875,"note":"..."}  (after sending the money back by hand)
-//	POST /admin/orders/{id}/resolve {"outcome":"delivered"|"failed","note":"..."}  (a PENDING order, once you have checked with ABS what happened)
+//	POST /admin/orders/{id}/retry {"note":"...","confirm":true}  (buy a REFUND_DUE or PENDING order from ABS again; your decision, never automatic)
+//	POST /admin/orders/{id}/resolve {"outcome":"delivered"|"failed","note":"..."}  (a PENDING order, once you have checked with ABS what happened;
+//	                                                                              a REFUND_DUE one too, as "delivered" with a note, if you served the customer by hand)
 //	POST /admin/expenses {"category":"hosting","label":"Server","amount_kobo":1500000}; GET /admin/expenses?from=&to=; DELETE /admin/expenses/{id}
 //	GET /admin/settings; PUT /admin/settings/{key} {"value": ...}; DELETE /admin/settings/{key}; GET /admin/settings/history
 //	GET /admin/stats?from=2026-10-01&to=2026-10-20   (counts, revenue, profit, money at risk, daily series)
@@ -94,6 +96,7 @@ func (a *API) RegisterAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/webhooks", a.listWebhooks)
 	mux.HandleFunc("POST /admin/orders/{id}/refunded", a.markRefunded)
 	mux.HandleFunc("POST /admin/orders/{id}/resolve", a.resolveOrder)
+	mux.HandleFunc("POST /admin/orders/{id}/retry", a.retryOrder)
 	mux.HandleFunc("GET /admin/settings", a.listSettings)
 	mux.HandleFunc("GET /admin/settings/history", a.settingsHistory)
 	mux.HandleFunc("PUT /admin/settings/{key}", a.putSetting)
@@ -254,9 +257,11 @@ type adminOrderView struct {
 	TxnReference  string `json:"transaction_reference,omitempty"`
 	// VendorReference is ABS's own id for the purchase, to find it in the ABS dashboard. Present once an
 	// ABS webhook has been matched to the order.
-	VendorReference string    `json:"vendor_reference,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	VendorReference string `json:"vendor_reference,omitempty"`
+	// Attempts is how many purchases were sent to ABS for this order; shown only when the owner bought it again.
+	Attempts  int       `json:"attempts,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func refundedAt(o Order) *time.Time {
@@ -271,12 +276,13 @@ func adminViewOf(o Order) adminOrderView {
 		PlanID: o.PlanID, PlanName: o.PlanName, PlanNote: o.PlanNote, Recipient: o.Recipient, AmountKobo: o.AmountKobo, FeeKobo: o.FeeKobo,
 		TotalKobo: o.Due(), CostKobo: o.CostKobo, PaymentFee: o.PaymentFeeKobo, ProfitKobo: o.Profit(),
 		RefundFee: o.RefundFeeKobo, RefundedKobo: o.Refunded(), RefundNote: o.RefundNote, RefundedAt: refundedAt(o),
-		CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, VendorReference: o.VendorRef, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
+		CustomerEmail: o.CustomerEmail, TxnReference: o.TxnRef, VendorReference: o.VendorRef, Attempts: attemptsShown(o), CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt}
 }
 
 // resolveOrder is POST /admin/orders/{id}/resolve {"outcome":"delivered"|"failed","note":"..."}: the owner
 // has checked with ABS what became of an order whose outcome the server could not tell (PENDING).
-// "delivered" makes it SUCCESS; "failed" makes it REFUND_DUE. See Service.Resolve.
+// "delivered" makes it SUCCESS; "failed" makes it REFUND_DUE. A REFUND_DUE order can also be marked
+// "delivered" (a note is then required): the customer was served another way. See Service.Resolve.
 func (a *API) resolveOrder(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Outcome string `json:"outcome"`
@@ -305,8 +311,10 @@ func (a *API) resolveOrder(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		reply.Fail(w, http.StatusNotFound, "order not found")
+	case errors.Is(err, ErrNoteRequired):
+		reply.Fail(w, http.StatusBadRequest, `a note is required to mark a refund due order delivered: say how it was delivered (for example "bought by hand in the ABS dashboard")`)
 	case errors.Is(err, ErrNotPending):
-		reply.Fail(w, http.StatusConflict, "only a PENDING order can be resolved; this one is "+string(o.Status))
+		reply.Fail(w, http.StatusConflict, "only a PENDING order can be resolved (or a REFUND_DUE one as delivered); this one is "+string(o.Status))
 	case err != nil:
 		a.Log.Error("Resolve - API", "detail", err.Error())
 		reply.Fail(w, http.StatusInternalServerError, "internal error")
@@ -314,6 +322,60 @@ func (a *API) resolveOrder(w http.ResponseWriter, r *http.Request) {
 		a.Log.Info("Resolve - API", "detail", fmt.Sprintf("order %s marked %s by %s", o.ID, req.Outcome, by))
 		reply.OK(w, http.StatusOK, adminViewOf(o))
 	}
+}
+
+// retryOrder is POST /admin/orders/{id}/retry {"note":"...","confirm":true}: the owner chose to buy an order from
+// ABS again (see Service.Retry). It answers 202 with the order as VENDING at once; the purchase runs in the
+// background and the result shows on the order a few seconds to a minute and a half later.
+func (a *API) retryOrder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Note    string `json:"note"`
+		Confirm bool   `json:"confirm"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
+	if err != nil || (len(strings.TrimSpace(string(body))) > 0 && json.Unmarshal(body, &req) != nil) {
+		reply.Fail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	req.Note = strings.TrimSpace(req.Note)
+	if len([]rune(req.Note)) > 500 {
+		reply.Fail(w, http.StatusBadRequest, "note must be at most 500 characters")
+		return
+	}
+	by := "unknown"
+	if actor, ok := platform.ActorFrom(r.Context()); ok {
+		by = actor.Name
+	}
+	o, err := a.Retry(r.Context(), r.PathValue("id"), req.Note, by, req.Confirm)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		reply.Fail(w, http.StatusNotFound, "order not found")
+	case errors.Is(err, ErrConfirmRequired):
+		reply.Fail(w, http.StatusBadRequest, `this order is PENDING: nobody knows yet whether ABS delivered it, so buying again may deliver it twice and charge you twice. `+
+			`Check the ABS dashboard first (recipient, amount, time), then send {"confirm": true} to go ahead`)
+	case errors.Is(err, ErrNotRetryable):
+		reply.Fail(w, http.StatusConflict, "only a PENDING or REFUND_DUE order can be bought again; this one is "+string(o.Status))
+	case err != nil:
+		a.Log.Error("Retry - API", "detail", err.Error())
+		reply.Fail(w, http.StatusInternalServerError, "internal error")
+	default:
+		a.Log.Info("Retry - API", "detail", fmt.Sprintf("order %s bought again (attempt %d) by %s", o.ID, o.Attempts, by))
+		a.buyAgainInBackground(o)
+		reply.OK(w, http.StatusAccepted, adminViewOf(o))
+	}
+}
+
+// buyAgainInBackground makes the repeat purchase without holding the admin app's request open.
+func (a *API) buyAgainInBackground(o Order) {
+	a.vending.Add(1)
+	go func() {
+		defer a.vending.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := a.BuyAgain(ctx, o); err != nil {
+			a.Log.Error("Retry - Order", "detail", fmt.Sprintf("order %s: %v", o.ID, err))
+		}
+	}()
 }
 
 // markRefunded closes an order in REFUND_DUE after the money was sent back by
@@ -375,6 +437,7 @@ func (a *API) markRefunded(w http.ResponseWriter, r *http.Request) {
 		a.Log.Info("MarkRefunded - API", "detail", fmt.Sprintf("order %s marked refunded (%d kobo sent back, the refund cost %d kobo)", o.ID, o.Refunded(), o.RefundFeeKobo))
 		a.event(LevelInfo, "refund.sent", o.ID, fmt.Sprintf("refund recorded as sent: %s back to the customer, the refund cost %s", formatNaira(o.Refunded()), formatNaira(o.RefundFeeKobo)),
 			map[string]any{"refunded_kobo": o.Refunded(), "refund_fee_kobo": o.RefundFeeKobo})
+		a.sendRefundNotice(r.Context(), o)
 		reply.OK(w, http.StatusOK, adminViewOf(o))
 	}
 }
@@ -768,6 +831,9 @@ func (a *API) purgeWebhooks(ctx context.Context) {
 	if n > 0 {
 		a.Log.Info("Sweep - Order", "detail", fmt.Sprintf("deleted %d webhook records older than %d days", n, int(a.WebhookRetention.Hours()/24)))
 	}
+	if _, err := a.Store.PurgeABSTransactions(ctx, time.Now().Add(-a.WebhookRetention)); err != nil {
+		a.Log.Error("Sweep - Order", "detail", "could not purge old ABS records: "+err.Error())
+	}
 }
 
 // vendInBackground buys from ABS without holding the caller up: Monnify's
@@ -955,4 +1021,12 @@ func (a *API) settingsHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply.OK(w, http.StatusOK, map[string]any{"count": len(changes), "changes": changes})
+}
+
+// attemptsShown is the attempt count worth showing: only a repeat purchase has one.
+func attemptsShown(o Order) int {
+	if o.Attempts > 1 {
+		return o.Attempts
+	}
+	return 0
 }

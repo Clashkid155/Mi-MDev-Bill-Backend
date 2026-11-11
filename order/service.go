@@ -352,6 +352,13 @@ func (s *Service) Vend(ctx context.Context, o Order) error {
 	if err != nil || !moved {
 		return err
 	}
+	return s.vendNow(ctx, o)
+}
+
+// vendNow buys an order that is already VENDING and records the outcome. Vend gets it there from PAID and
+// Retry from PENDING or REFUND_DUE; whoever moved it is the only caller.
+func (s *Service) vendNow(ctx context.Context, o Order) error {
+	var err error
 	result := s.buy(ctx, o)
 	logVend(s.Log, o.ID, result)
 

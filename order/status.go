@@ -34,9 +34,11 @@ var transitions = map[Status][]Status{
 	StatusPartiallyPaid: {StatusPaid, StatusOverpaid},
 	StatusPaid:          {StatusVending},
 	StatusVending:       {StatusSuccess, StatusFailed, StatusPending},
-	StatusPending:       {StatusSuccess, StatusFailed},
-	StatusFailed:        {StatusRefundDue},
-	StatusRefundDue:     {StatusRefunded},
+	// PENDING and REFUND_DUE go back to VENDING only when the owner chooses to buy again (Service.Retry).
+	StatusPending: {StatusSuccess, StatusFailed, StatusVending},
+	StatusFailed:  {StatusRefundDue},
+	// REFUND_DUE becomes SUCCESS when the owner delivered the order by hand instead (Service.Resolve).
+	StatusRefundDue: {StatusRefunded, StatusSuccess, StatusVending},
 	// An expired order is never vended. Monnify should refuse a late transfer, but if
 	// money does arrive on one, it is refunded instead.
 	StatusExpired: {StatusRefundDue},

@@ -520,3 +520,260 @@ func TestOldDatabasesGetTheVendorRefColumn(t *testing.T) {
 		t.Errorf("%+v", got)
 	}
 }
+
+func refundedHook(ref, recipient, amount, createdAt string) abs.Event {
+	return abs.Event{Name: "refund.issued", Status: "6", OrderID: ref, Recipient: recipient, Amount: amount, CreatedAt: createdAt, Message: "Bought 1GB for NGN 430"}
+}
+
+func settledAt(ref, recipient, amount, createdAt string) abs.Event {
+	ev := settledHook(ref, recipient, amount)
+	ev.CreatedAt = createdAt
+	return ev
+}
+
+func ownerSubjects(sent func() []string, contains string) int {
+	n := 0
+	for _, s := range sent() {
+		if strings.Contains(s, contains) {
+			n++
+		}
+	}
+	return n
+}
+
+// 2026-11-11: ABS failed the attempt and refunded it, the owner bought it by hand, and then ABS
+// "processed" the failed one after all.
+func TestAPurchaseABSRefundedThatSettlesLaterRaisesAnAlarm(t *testing.T) {
+	f, read := eventsFixture(t)
+	_, sent := alertsOn(t, f)
+	ctx := context.Background()
+	failed := vendedOrder(t, f, "dbl-1", "07031849072", insufficient, 400)
+	if failed.Status != StatusRefundDue {
+		t.Fatalf("status %s", failed.Status)
+	}
+
+	// ABS: the attempt was refunded (ignored for orders, but remembered).
+	if err := f.svc.SettleFromABS(ctx, refundedHook("BD-A", "07031849072", "99", "2026-11-11T00:04:02+00:00")); err != nil {
+		t.Fatal(err)
+	}
+	// The owner's own purchase settles: matches the refund due order, which is only reported.
+	if err := f.svc.SettleFromABS(ctx, settledAt("BD-B", "07031849072", "99", "2026-11-11T00:12:02+00:00")); err != nil {
+		t.Fatal(err)
+	}
+	if got := orderNow(t, f, failed.ID); got.Status != StatusRefundDue || got.VendorRef != "BD-B" {
+		t.Fatalf("status %s, ref %q", got.Status, got.VendorRef)
+	}
+	if ownerSubjects(sent, "ABS delivered an order recorded as REFUND_DUE") != 1 {
+		t.Fatalf("the owner should have been told: %q", sent())
+	}
+	if len(eventsOf(read, "abs.redelivered")) != 0 {
+		t.Fatal("nothing was redelivered yet")
+	}
+
+	// Later ABS settles the purchase it had refunded.
+	if err := f.svc.SettleFromABS(ctx, settledAt("BD-A", "07031849072", "99", "2026-11-11T00:40:00+00:00")); err != nil {
+		t.Fatal(err)
+	}
+	ev := eventsOf(read, "abs.redelivered")
+	if len(ev) != 1 || ev[0].Level != LevelError || !strings.Contains(string(ev[0].Detail), `"abs_order":"BD-A"`) {
+		t.Fatalf("events %+v", ev)
+	}
+	if ownerSubjects(sent, "ABS settled a purchase it had refunded") != 1 {
+		t.Errorf("the owner was not emailed: %q", sent())
+	}
+	if got := orderNow(t, f, failed.ID); got.Status != StatusRefundDue || got.VendorRef != "BD-B" {
+		t.Errorf("a redelivered purchase changed the order: %s, %q", got.Status, got.VendorRef)
+	}
+	// ABS delivering the same message again does not email again.
+	f.svc.SettleFromABS(ctx, settledAt("BD-A", "07031849072", "99", "2026-11-11T00:40:00+00:00"))
+	if ownerSubjects(sent, "ABS settled a purchase it had refunded") != 1 {
+		t.Errorf("a repeat sent another email: %q", sent())
+	}
+}
+
+func TestMessagesOutOfOrderOrRepeatedAreNotAlarms(t *testing.T) {
+	f, read := eventsFixture(t)
+	ctx := context.Background()
+	hooks := []abs.Event{
+		// A refund message that arrives after the settled one it is older than.
+		settledAt("BD-1", "08011111111", "50", "2026-11-11T10:00:00+00:00"),
+		refundedHook("BD-1", "08011111111", "50", "2026-11-11T09:00:00+00:00"),
+		settledAt("BD-1", "08011111111", "50", "2026-11-11T10:00:00+00:00"),
+		// Settled, then refunded, is a reversal, not a double charge.
+		settledAt("BD-2", "08022222222", "50", "2026-11-11T10:00:00+00:00"),
+		refundedHook("BD-2", "08022222222", "50", "2026-11-11T11:00:00+00:00"),
+		// Failed, repeated, settled with no time on it is still after the failure.
+	}
+	for _, ev := range hooks {
+		if err := f.svc.SettleFromABS(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(eventsOf(read, "abs.redelivered")); n != 0 {
+		t.Errorf("%d alarms for harmless message orders", n)
+	}
+	// The record keeps the newest state.
+	state := func(id string) string {
+		var s string
+		f.svc.Store.db.QueryRow(`SELECT state FROM abs_transactions WHERE abs_id = ?`, id).Scan(&s)
+		return s
+	}
+	if state("BD-1") != "settled" || state("BD-2") != "refunded" {
+		t.Errorf("recorded %q and %q", state("BD-1"), state("BD-2"))
+	}
+}
+
+func TestAFailedThenSettledMessageWithoutATimeStillAlarms(t *testing.T) {
+	f, read := eventsFixture(t)
+	ctx := context.Background()
+	f.svc.SettleFromABS(ctx, failedHook("BD-9", "08033333333", "50"))
+	f.svc.SettleFromABS(ctx, settledHook("BD-9", "08033333333", "50"))
+	if n := len(eventsOf(read, "abs.redelivered")); n != 1 {
+		t.Errorf("%d alarms, want 1", n)
+	}
+}
+
+// A settled message tied to a purchase while a pending order waits must not settle it.
+func TestARedeliveredPurchaseNeverSettlesAPendingOrder(t *testing.T) {
+	f, _ := eventsFixture(t)
+	ctx := context.Background()
+	pending := pendingFor(t, f, "dbl-pending", "09073931630")
+	f.svc.SettleFromABS(ctx, refundedHook("BD-R", "09073931630", "99", "2026-11-11T00:00:00+00:00"))
+	f.svc.SettleFromABS(ctx, settledAt("BD-R", "09073931630", "99", "2026-11-11T01:00:00+00:00"))
+	if got := orderNow(t, f, pending.ID); got.Status != StatusPending {
+		t.Errorf("the pending order became %s", got.Status)
+	}
+}
+
+func TestASecondSettledPurchaseForAnOrderAlreadyTiedToOneIsReported(t *testing.T) {
+	f, read := eventsFixture(t)
+	_, sent := alertsOn(t, f)
+	ctx := context.Background()
+	o := settledFor(t, f, "twin-1", "09073931630")
+	if err := f.svc.SettleFromABS(ctx, settledHook("BA-1", "09073931630", "99")); err != nil {
+		t.Fatal(err)
+	}
+	if got := orderNow(t, f, o.ID); got.VendorRef != "BA-1" {
+		t.Fatalf("ref %q", got.VendorRef)
+	}
+
+	// The same message again is just the same purchase.
+	f.svc.SettleFromABS(ctx, settledHook("BA-1", "09073931630", "99"))
+	if n := len(eventsOf(read, "abs.duplicate")); n != 0 {
+		t.Fatalf("a repeat of the same purchase was called a duplicate: %d", n)
+	}
+
+	// A different ABS purchase for the same recipient and amount is reported, and nothing changes.
+	if err := f.svc.SettleFromABS(ctx, settledHook("BA-2", "09073931630", "99")); err != nil {
+		t.Fatal(err)
+	}
+	ev := eventsOf(read, "abs.duplicate")
+	if len(ev) != 1 || ev[0].Level != LevelWarn || ev[0].OrderID != o.ID {
+		t.Fatalf("events %+v", ev)
+	}
+	if ownerSubjects(sent, "Possible double purchase") != 1 {
+		t.Errorf("the owner was not emailed: %q", sent())
+	}
+	if len(eventsOf(read, "abs.unmatched")) != 0 {
+		t.Error("it was also reported as unmatched")
+	}
+	if got := orderNow(t, f, o.ID); got.Status != StatusSuccess || got.VendorRef != "BA-1" {
+		t.Errorf("the order changed: %s, %q", got.Status, got.VendorRef)
+	}
+	// A failed message is not a double delivery.
+	f.svc.SettleFromABS(ctx, failedHook("BA-3", "09073931630", "99"))
+	if n := len(eventsOf(read, "abs.duplicate")); n != 1 {
+		t.Errorf("a failed message was reported as a duplicate")
+	}
+}
+
+func TestOldABSRecordsAreForgotten(t *testing.T) {
+	f := newFakes(t)
+	ctx := context.Background()
+	f.svc.Store.NoteABSState(ctx, "BD-old", "settled", time.Now())
+	f.svc.Store.NoteABSState(ctx, "BD-new", "settled", time.Now())
+	f.svc.Store.db.Exec(`UPDATE abs_transactions SET updated_at = ? WHERE abs_id = 'BD-old'`, time.Now().Add(-100*24*time.Hour).Unix())
+	n, err := f.svc.Store.PurgeABSTransactions(ctx, time.Now().Add(-90*24*time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("purged %d, %v", n, err)
+	}
+	var left int
+	f.svc.Store.db.QueryRow(`SELECT COUNT(*) FROM abs_transactions`).Scan(&left)
+	if left != 1 {
+		t.Errorf("%d records left, want 1", left)
+	}
+}
+
+// A customer who buys the same airtime for the same number twice has two identical delivered orders. Their
+// messages fit both, but neither order needs anything, so the owner is not warned about it.
+func TestIdenticalDeliveredOrdersDoNotRaiseAnAmbiguityWarning(t *testing.T) {
+	f, read := eventsFixture(t)
+	a := settledFor(t, f, "same-a", "09073931630")
+	b := settledFor(t, f, "same-b", "09073931630")
+	for _, ref := range []string{"BA-1", "BA-2"} {
+		if err := f.svc.SettleFromABS(context.Background(), settledHook(ref, "09073931630", "99")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(eventsOf(read, "abs.ambiguous")); n != 0 {
+		t.Errorf("%d ambiguity warnings for two orders that need nothing", n)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		if got := orderNow(t, f, id); got.Status != StatusSuccess {
+			t.Errorf("%s became %s", id, got.Status)
+		}
+	}
+}
+
+// The owner bought a pending order again. A failed message could be about either purchase, so it never
+// refunds the order, and never raises an alarm about an order that was delivered.
+func TestAFailedMessageForAnOrderBoughtTwiceIsNotActedOn(t *testing.T) {
+	f, read := eventsFixture(t)
+	api := &API{Service: f.svc}
+	srv := httptest.NewServer(api.AdminRoutes())
+	defer srv.Close()
+	ctx := context.Background()
+
+	// Bought again and still unknown: a failed message must not make it a refund due.
+	pending := pendingFor(t, f, "twice-pending", "09073931630")
+	if code, _ := retryPost(t, srv, pending.ID, `{"confirm":true}`); code != 202 {
+		t.Fatal(code)
+	}
+	api.Wait()
+	if got := orderNow(t, f, pending.ID); got.Status != StatusPending || got.Attempts != 2 {
+		t.Fatalf("status %s, attempts %d", got.Status, got.Attempts)
+	}
+	if err := f.svc.SettleFromABS(ctx, failedHook("BD-first", "09073931630", "99")); err != nil {
+		t.Fatal(err)
+	}
+	if got := orderNow(t, f, pending.ID); got.Status != StatusPending || got.VendorRef != "" {
+		t.Errorf("a failed message settled an order bought twice: %s, %q", got.Status, got.VendorRef)
+	}
+	if len(eventsOf(read, "abs.unclear")) != 1 {
+		t.Error("the owner should be told it could not be tied to a purchase")
+	}
+	// A settled message is still good news whichever purchase it is about.
+	if err := f.svc.SettleFromABS(ctx, settledHook("BD-second", "09073931630", "99")); err != nil {
+		t.Fatal(err)
+	}
+	if got := orderNow(t, f, pending.ID); got.Status != StatusSuccess || got.VendorRef != "BD-second" {
+		t.Errorf("status %s, ref %q", got.Status, got.VendorRef)
+	}
+
+	// Failed first, then bought again and delivered: the first purchase's late failed message is no alarm.
+	failed := vendedOrder(t, f, "twice-failed", "07031849072", insufficient, 400)
+	f.absFails(absSuccess, 200)
+	if code, _ := retryPost(t, srv, failed.ID, `{}`); code != 202 {
+		t.Fatal(code)
+	}
+	api.Wait()
+	if err := f.svc.SettleFromABS(ctx, failedHook("BD-late", "07031849072", "99")); err != nil {
+		t.Fatal(err)
+	}
+	if got := orderNow(t, f, failed.ID); got.Status != StatusSuccess || got.VendorRef != "" {
+		t.Errorf("status %s, ref %q", got.Status, got.VendorRef)
+	}
+	if n := len(eventsOf(read, "abs.conflict")); n != 0 {
+		t.Errorf("%d conflict alarms for the earlier purchase failing", n)
+	}
+}
